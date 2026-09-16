@@ -9,7 +9,7 @@ resource has no VORP compatibility layer or legacy table dependency.
 - Core and Economy readiness/contract validation.
 - Checksummed schema migration and UUID shop/offer identities.
 - Server-configured NPC catalog persisted with integer minor-unit prices.
-- Public read-only catalog snapshots. No client mutation or payment route yet.
+- Public read-only catalog snapshots and source-bound player quote/purchase RPCs.
 - Durable prepared orders with buyer/quote-bound request IDs and restart replay.
 
 Config is authoritative for the initial catalog. Startup synchronizes configured
@@ -18,7 +18,7 @@ tables manually. Catalog reads return copies, not mutable service state.
 
 The initial Valentine apple offer costs 100 dollars minor units ($1.00).
 Quote validation checks the active Inventory definition and rejects weapons and
-unique items. Foundation readiness does not claim fulfillment is available.
+unique items. Weapons and unique-item commerce remain deferred.
 
 ## Load order
 
@@ -32,8 +32,8 @@ Catalog snapshots contain public offer data, not owner balances or credentials.
 
 Trusted server callers may use `CreateQuote(request, actorSource)` and
 `ValidateQuote(quoteId, actorSource)`. Quote requests accept only `shopId`,
-`offerId`, and a numeric integer `quantity`. No client route exists yet; a future
-RPC handler must supply its actual Core-bound source, not a request field.
+`offerId`, and a numeric integer `quantity`. Player RPC handlers supply their
+actual Core-bound caller source, never a request field.
 
 Quotes have a UUID, authoritative integer total, material catalog revision,
 Inventory definition ID, expiry, and server-only buyer/session identity. Never
@@ -50,8 +50,8 @@ order with `replayed=true`, including after restart or quote expiry. Receipt
 replay requires a current session belonging to the original account/character;
 it does not authorize payment or fulfillment using expired quoted terms.
 
-Orders currently remain `prepared`. No production payment, grant, refund, or automatic
-reconciliation runs. Future states will be introduced through a new migration.
+Order receipts remain `prepared`; executions and compensation are tracked in
+separate durable tables. Existing accepted intents reconcile automatically.
 These records intentionally remain as development receipts; do not delete them
 to retry an operation. Like quotes, order snapshots contain server-only identity.
 
@@ -60,7 +60,7 @@ to retry an operation. Like quotes, order snapshots contain server-only identity
 The immutable prepared receipt remains in `shop_orders`. Migration 003 adds
 `shop_order_executions` for `payment_pending`, `paid`, `fulfilled`, and `rejected`.
 This preserves the applied catalog/order migrations. The coordinator is internal
-only: no payment export or client route is available before compensation passes.
+behind source-bound player routes; no generic payment or refund export is exposed.
 
 Payment intent fixes the buyer wallet, currency, amount, and Economy system sink
 before charging. Economy resolves the sink through its trusted `GetSystemAccount`
@@ -73,6 +73,8 @@ funds is terminal; uncertain payment errors remain `payment_pending`, and failed
 delivery remains `paid` with an operator-visible error. State updates are
 conditional and do not regress completed executions. Runtime concurrent calls
 for one order are rejected; downstream durable keys protect interrupted calls.
+Refund retries reconfirm Inventory's durable cancellation fence before attempting
+the original payment reversal; unavailable proof blocks the refund.
 The reconciliation worker retries existing incomplete payment/delivery intents
 and existing compensation requests. It never automatically chooses compensation.
 
@@ -107,7 +109,7 @@ sameInstances=true. Two apples are delivered. Repeat the purchase command using
 the same request ID after restarting Shops; there must be no additional charge
 or grant. Do not fund again with a new ID just to retry a completed purchase.
 The live test refuses existing incomplete orders; they need explicit recovery,
-not another order ID. Payment remains internal until compensation passes.
+not another order ID. Player payments use this coordinator; refunds remain server-only.
 
 ### Interrupted purchase tests
 
@@ -273,6 +275,91 @@ and make no Economy calls.
 
 ## Next slice
 
-Durable orders, authoritative session-bound quotes, Economy payment,
-idempotent Inventory fulfillment, compensation, and restart reconciliation.
+Player-facing client interaction/UI and end-to-end RPC acceptance tests.
+
+## Player RPC contract
+
+`shops.wallets.v1` accepts an empty payload and reads only the current caller's
+open character wallets through Economy. It returns currency, label, integer
+minor-unit balance, and catalog precision, never account/owner identifiers.
+Session identity is rechecked after dependency reads. This is a read, not wallet
+provisioning. Shop browsing, quote confirmation, and purchase result pages refresh
+these balances; failed reads show unavailable rather than fabricated zero funds.
+The display is a snapshot, not purchase authority. Economy still checks funds
+atomically when charging. HUD integration remains separate.
+
+The first interaction UI uses Toolkit's hold-B Browse shop prompt within three
+metres of a catalog location and Feather Menu v2. Select an offer, enter quantity,
+review the server quote, then explicitly confirm payment. Escape/Close releases
+menu focus. Closing review does not purchase. Uncertain purchase responses retain
+the exact request in client KVP, including across restart; reopening offers Retry
+saved purchase rather than minting another payment. Terminal unpaid rejections
+return safeToClear confirmation and restore browsing. Unaccepted expired requests
+are explicitly confirmed not_accepted by the server and restore browsing too;
+accepted payment intents never clear merely because their quote expired. No generic client
+discard/refund mechanism is supplied. Server quote/purchase validation remains
+authoritative if the player moves away. The initial dollars/gold catalog uses
+two-decimal formatting. No shopkeeper entity, stock management, or selling UI yet.
+
+The read-only `shops.catalog.v1` RPC supplies locations/offers to the client without
+sharing server access configuration. Toolkit and Menu v2 are dependencies. After
+manifest changes run refresh, then restart feather-shops. UI acceptance starts with
+opening, browsing, cancelling review, and Escape before testing funded confirmation.
+
+`shops.quote.v1` accepts only `{ shopId, offerId, quantity }`. It requires an active
+character and proximity. Its public quote contains id, shop/offer IDs, item,
+quantity, currency, integer price/total, revision, and expiry; no buyer identity.
+
+`shops.purchase.v1` accepts only `{ quoteId, requestId }`. Generate one stable
+request ID per intended purchase and preserve both fields on an uncertain retry;
+do not create a fresh request ID or quote to retry a payment. New payment intent
+requires the original live quote and proximity. Accepted intent retries replay
+stored terms for the original buyer. Completed responses contain only orderId,
+state, quantity, currency, total, and replayed. Failures omit server-only details.
+Core enforces character binding, bounded payloads, and per-source rate limits.
+No player refund route exists. Server reconciliation remains authoritative.
+
+Run `ShopPlayerRouteContractSmokeTest`: expect 11/11 passes with no funds moved.
+This verifies registration policy, payload rejection, and response projection;
+actual client transport and funded purchase acceptance are the next test gate.
+
+### Client quote transport acceptance
+
+With manifest metadata `shops_dev_tests 'true'`, run `ShopQuoteClientTest near`
+in the client's F8 console within four metres of the Valentine test shop.
+Expect 6/6 passes using the actual Core RPC transport, with no funds moved or
+items granted. Move outside the range and run `ShopQuoteClientTest far`; expect
+PASS outOfRange=true. These tests target the development apple offer and replace
+the caller's outstanding quote. They do not purchase or persist a client quote.
+Set the metadata to false to disable client acceptance commands. Server DevMode
+remains a separate switch. After adding manifest files, run refresh then restart
+feather-shops before testing.
+
+### Client purchase acceptance
+
+For movement between quote and purchase, with the menu closed run F8
+`ShopPurchaseRangeClientTest prepare` near the test shop. Walk at least six metres
+away, then run `ShopPurchaseRangeClientTest confirm` within the 30-second quote
+lifetime. Expect PASS purchaseRejected=true code=out_of_range. The test preflights
+local distance to avoid accidentally submitting an in-range purchase, but the
+server decides proximity. A timed-out mutation keeps its exact request in KVP;
+do not prepare another quote to recover it. Confirm uses the saved request if
+present. An expired quote fails this range test and must be tested again with a
+fresh preparation only after explicit safe-to-clear confirmation.
+
+With the same client development switch enabled, use a funded wallet near the
+test shop and run in F8 `ShopPurchaseClientTest client-purchase-001`. This is a
+real two-apple purchase costing 200 minor units. The client saves its request and
+quote in resource KVP before sending payment, then retries exactly those fields
+and checks the public fulfilled receipt. Never reuse a key for another intended
+purchase, server, or character; retries must use the original buyer.
+
+After PASS, run server-console `ShopPurchaseLiveTest <current source>
+client-purchase-001`. Existing fulfilled orders replay without new charges;
+the server verifies unchanged wallet/sink balances and the same Inventory instances.
+Inspect the initial wallet decrease and two-item inventory increase too: the
+client receipt alone does not prove exactly-once charging. After restarting Shops,
+repeat the same client command to exercise its persisted request. No fresh quote
+or funding is needed. Uncertain failures preserve the saved request; share the
+error and retain that ID rather than creating another purchase to recover.
 Player-owned shops, selling, management UI, and NPC buying are deferred.

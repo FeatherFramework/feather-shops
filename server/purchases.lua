@@ -197,7 +197,7 @@ local function Compensate(orderId, source, checkpoint, recovery)
     local called, result = xpcall(function()
         local order = MySQL.single.await("SELECT * FROM `shop_orders` WHERE `order_id`=? AND `source_resource`='feather-shops'", { orderId })
         local session = not recovery and exports['feather-core']:GetSessionContext(source) or nil
-        if not order or (not recovery and (not session.ok or session.value.characterId ~= order.buyer_character_id
+        if not order or (not recovery and (type(session) ~= 'table' or not session.ok or session.value.characterId ~= order.buyer_character_id
             or session.value.accountId ~= order.buyer_account_id)) then
             return Err('session_expired', 'Current original buyer required.')
         end
@@ -236,6 +236,17 @@ local function Compensate(orderId, source, checkpoint, recovery)
             MySQL.update.await([[UPDATE `shop_order_compensations` SET `state`='refund_pending',
                 `cancellation_json`=?,`last_error`=NULL WHERE `order_id`=? AND `state`='cancellation_pending']],
                 { json.encode(cancelled.value), orderId })
+        end
+        -- Reconfirm the terminal Inventory fence on every pending refund retry.
+        -- A local state label or damaged JSON is not sufficient delivery proof.
+        local proof = exports['feather-inventory']:CancelCharacterItemGrant({
+            grantId = 'shop-fulfillment:' .. orderId, characterId = order.buyer_character_id,
+            itemName = order.item_name, definitionId = tonumber(order.definition_id), quantity = tonumber(order.quantity) })
+        if type(proof) ~= 'table' or not proof.ok or type(proof.value) ~= 'table'
+            or proof.value.cancelled ~= true or proof.value.delivered ~= false then
+            local code = type(proof) == 'table' and proof.error and proof.error.code or 'dependency_invalid'
+            MySQL.update.await("UPDATE `shop_order_compensations` SET `last_error`=? WHERE `order_id`=? AND `state`='refund_pending'", { code, orderId })
+            return Err('refund_pending', 'Durable cancellation proof unavailable; refund blocked.', { cause = code })
         end
         local refund = exports['feather-economy']:ReversePayment({ transactionId = execution.payment_transaction_id },
             { actorSource = source, actorAccountId = order.buyer_account_id,

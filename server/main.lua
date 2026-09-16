@@ -42,6 +42,13 @@ local function Validate()
         return Err('invalid_config', 'Quote configuration is invalid.')
     end
     local ids, offerIds = {}, {}
+    local reconciliation = Config.Reconciliation
+    if type(reconciliation) ~= 'table' or type(reconciliation.enabled) ~= 'boolean'
+        or not Integer(reconciliation.pollIntervalMs, 1000, 60000)
+        or not Integer(reconciliation.retryDelaySeconds, 5, 3600)
+        or not Integer(reconciliation.batchSize, 1, 50) then
+        return Err('invalid_config', 'Reconciliation configuration is invalid.')
+    end
     for _, shop in ipairs(Config.Shops) do
         if type(shop) ~= 'table' or not Uuid(shop.id) or ids[shop.id]
             or shop.id ~= shop.id:lower() or not Text(shop.label, 100)
@@ -161,13 +168,14 @@ local function GetCatalog(shopId)
     return Ok(Copy(catalog[shopId]))
 end
 ShopService = { Ok = Ok, Err = Err, Copy = Copy, Integer = Integer,
-    Uuid = Uuid, GetCatalog = GetCatalog, IsReady = function() return health.state == 'ready' end }
+    Uuid = Uuid, GetCatalog = GetCatalog, ListShops = ListShops, IsReady = function() return health.state == 'ready' end }
 exports('GetHealth', function() return Ok(Copy(health)) end)
 exports('GetCapabilities', function()
     return Ok({ resource = 'feather-shops', contract = 1, state = health.state,
         version = health.version, features = { lifecycle = 1, migrations = 1,
             catalog = 1, quotes = 1, durableOrders = 1,
-            payments = 0, fulfillment = 0, playerShops = 0 } })
+            payments = 1, fulfillment = 1, playerPurchases = 1,
+            compensation = 1, reconciliation = 1, playerShops = 0 } })
 end)
 exports('ListShops', ListShops)
 exports('GetCatalog', GetCatalog)
@@ -231,7 +239,13 @@ CreateThread(function()
             health.checks.migrations.applied = health.checks.migrations.applied + purchases.value.applied
             health.checks.purchaseCoordinator = true
         end
-        return purchases
+        if not purchases.ok then return purchases end
+        local routeDeadline = GetGameTimer() + Config.ReadinessTimeoutMs
+        while not ShopPlayerRoutes and GetGameTimer() < routeDeadline do Wait(0) end
+        if not ShopPlayerRoutes then return Err('startup_failed', 'Player route service did not load.') end
+        local routes = ShopPlayerRoutes.Start()
+        if routes.ok then health.checks.playerRoutes = true end
+        return routes
     end, debug.traceback)
     if not called then result = Err('startup_failed', 'Shop startup failed.', { reason = tostring(result) }) end
     if not result.ok then

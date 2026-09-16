@@ -3,6 +3,7 @@ Config = {
     DevMode = true,
     ReadinessTimeoutMs = 30000,
     MaximumOffersPerShop = 100,
+    Reconciliation = { enabled = true, pollIntervalMs = 5000, retryDelaySeconds = 15, batchSize = 10 },
     Quotes = {
         lifetimeSeconds = 30,
         maximumDistance = 4.0,

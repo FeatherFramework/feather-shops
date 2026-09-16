@@ -134,6 +134,7 @@ end
 exports('PrepareOrder', function(request, source)
     return Prepare(request, source, GetInvokingResource())
 end)
+ShopOrders.Prepare = Prepare
 
 RegisterCommand('ShopOrderContractSmokeTest', function(source)
     if source ~= 0 then return end

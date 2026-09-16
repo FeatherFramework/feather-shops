@@ -222,7 +222,16 @@ CreateThread(function()
             health.checks.migrations.applied = health.checks.migrations.applied + orders.value.applied
             health.checks.orders = true
         end
-        return orders
+        if not orders.ok then return orders end
+        local purchaseDeadline = GetGameTimer() + Config.ReadinessTimeoutMs
+        while not ShopPurchases and GetGameTimer() < purchaseDeadline do Wait(0) end
+        if not ShopPurchases then return Err('startup_failed', 'Purchase service did not load.') end
+        local purchases = ShopPurchases.Start()
+        if purchases.ok then
+            health.checks.migrations.applied = health.checks.migrations.applied + purchases.value.applied
+            health.checks.purchaseCoordinator = true
+        end
+        return purchases
     end, debug.traceback)
     if not called then result = Err('startup_failed', 'Shop startup failed.', { reason = tostring(result) }) end
     if not result.ok then

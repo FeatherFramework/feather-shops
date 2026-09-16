@@ -14,7 +14,11 @@ server_scripts {
     'server/main.lua',
     'server/quotes.lua',
     'server/orders.lua',
-    'server/fulfillment.lua'
+    'server/fulfillment.lua',
+    'server/purchases.lua',
+    'server/purchase_tests.lua',
+    'server/compensation_tests.lua',
+    'server/reconciliation.lua'
 }
 
 dependencies { 'oxmysql', 'feather-core', 'feather-economy', 'feather-inventory' }

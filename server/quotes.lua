@@ -7,7 +7,7 @@ end
 
 -- Revision describes all material quote/catalog fields in a fixed order.
 local function Revision(shop, offer)
-    local material = table.concat({ shop.id, tostring(shop.position.x),
+    local material = table.concat({ shop.id, tostring(shop.organizationId), tostring(shop.position.x),
         tostring(shop.position.y), tostring(shop.position.z), offer.id,
         offer.itemName, offer.currency, tostring(offer.unitPrice),
         tostring(offer.maximumQuantity) }, '|')
@@ -83,6 +83,8 @@ local function CreateQuote(request, source)
     if not ShopService.Integer(source, 1, 65535) then return Err('invalid_input', 'Active player source required.') end
     local terms = Terms(request)
     if not terms.ok then return terms end
+    local commerce=ShopOrganizations.CheckCommerce(request.shopId)
+    if not commerce.ok then return commerce end
     local session = exports['feather-core']:GetSessionContext(source)
     if type(session) ~= 'table' or not session.ok then
         return Err('session_expired', 'Active character session required.')
@@ -105,6 +107,9 @@ local function CreateQuote(request, source)
     local nearby = Near(source, terms.value.shop)
     if not nearby.ok then return nearby end
     if not ShopService.Uuid(quote.id) then return Err('internal_error', 'Could not allocate quote identity.') end
+    commerce=ShopOrganizations.CheckCommerce(request.shopId)
+    if not commerce.ok then return commerce end
+    if not BindingCurrent(source,quote) then return Err('session_expired','Buyer session changed.') end
     quotes[source] = quote -- one outstanding quote per source; replaces previous quote
     return Ok(Copy(quote))
 end
@@ -134,6 +139,10 @@ local function ValidateQuote(quoteId, source)
     local nearby = Near(source, terms.value.shop)
     if not nearby.ok then return nearby end
     if quote.expiresAt <= os.time() then return Err('quote_expired', 'Quote expired.') end
+    local commerce=ShopOrganizations.CheckCommerce(quote.shopId)
+    if not commerce.ok then return commerce end
+    if not BindingCurrent(source,quote) then return Err('session_expired','Buyer session changed.') end
+    if quotes[source]~=quote then return Err('quote_not_found','Quote was replaced while validating.') end
     return Ok(Copy(quote))
 end
 local function Allowed()

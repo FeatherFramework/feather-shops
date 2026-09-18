@@ -1,6 +1,7 @@
 -- Recovery consumes stored acceptance, not a player source or an expired quote.
 -- No new orders, payment intents, or compensation requests are created here.
 local running, attempted, completed, failed = false, 0, 0, 0
+local testPaused=false
 local config = Config.Reconciliation
 local valid = type(config) == 'table' and type(config.enabled) == 'boolean'
     and ShopService.Integer(config.pollIntervalMs, 1000, 60000)
@@ -12,7 +13,7 @@ CreateThread(function()
     running = true
     while true do
         Wait(config.pollIntervalMs)
-        if ShopService.IsReady() then
+        if ShopService.IsReady() and not testPaused then
             local called, errorText = xpcall(function()
                 local rows = MySQL.query.await([[SELECT e.`order_id`,c.`state` AS compensation_state
                     FROM `shop_order_executions` e
@@ -24,6 +25,7 @@ CreateThread(function()
                     ORDER BY COALESCE(c.`updated_at`,e.`updated_at`),e.`order_id` LIMIT ?]],
                     { config.retryDelaySeconds, config.batchSize }) or {}
                 for _, row in ipairs(rows) do
+                    if testPaused then break end
                     local refund = row.compensation_state == 'cancellation_pending' or row.compensation_state == 'refund_pending'
                     -- Advance attempt time even if the dependency returns the same
                     -- error again, keeping persistent failures from starving others.
@@ -42,8 +44,16 @@ CreateThread(function()
         end
     end
 end)
+RegisterCommand('ShopReconciliationTestControl',function(source,args)
+    if source~=0 or not Config.DevMode then return end
+    if #args~=1 or (args[1]~='pause' and args[1]~='resume') then
+        print('[ShopReconciliationTestControl] FAIL use pause|resume');return
+    end
+    testPaused=args[1]=='pause'
+    print(('[ShopReconciliationTestControl] PASS paused=%s; resume or restart feather-shops after testing'):format(tostring(testPaused)))
+end,true)
 RegisterCommand('ShopReconciliationState', function(source)
     if source ~= 0 then return end
     print('[ShopReconciliationState] ' .. json.encode({ enabled = valid and config.enabled or false,
-        running = running, ready = ShopService.IsReady(), attempted = attempted, completed = completed, failed = failed }))
+        running = running, paused = testPaused, ready = ShopService.IsReady(), attempted = attempted, completed = completed, failed = failed }))
 end, true)

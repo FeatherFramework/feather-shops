@@ -24,7 +24,7 @@ RegisterCommand('ShopPurchaseRecoveryTest', function(source, args)
     for _, account in ipairs(wallets.ok and wallets.value or {}) do
         if account.currency == currency then wallet = account; break end
     end
-    local sink = exports['feather-economy']:GetSystemAccount({ currency = currency, accountType = 'system_sink' })
+    local sink = ShopOrganizations.Settlement(order and order.shop_id or shop.id, currency, order and order.order_id)
     if not wallet or not sink.ok then print('[ShopPurchaseRecoveryTest] FAIL wallet/settlement unavailable'); return end
     if not order then
         if wallet.balance < offer.unitPrice * 2 then print('[ShopPurchaseRecoveryTest] FAIL fund wallet first'); return end
@@ -110,8 +110,12 @@ RegisterCommand('ShopPurchaseLiveTest', function(source, args)
         if account.currency == currency then wallet = account; break end
     end
     if not wallet then print('[ShopPurchaseLiveTest] FAIL wallet unavailable'); return end
-    local sink = exports['feather-economy']:GetSystemAccount({ currency = currency, accountType = 'system_sink' })
+    local sink = ShopOrganizations.Settlement(order and order.shop_id or shop.id, currency, order and order.order_id)
     if not sink.ok then print('[ShopPurchaseLiveTest] FAIL settlement unavailable'); return end
+    if not order and (sink.value.accountType ~= 'treasury' or sink.value.ownerType ~= 'organization'
+        or sink.value.ownerId ~= ShopOrganizations.GetId(shop.id)) then
+        print('[ShopPurchaseLiveTest] FAIL new purchase must settle to canonical business treasury'); return
+    end
     local existing = order ~= nil
     if not order then
         if wallet.balance < total then print('[ShopPurchaseLiveTest] FAIL fund wallet first; no order created'); return end
@@ -137,6 +141,7 @@ RegisterCommand('ShopPurchaseLiveTest', function(source, args)
         grantId = 'shop-fulfillment:' .. order.order_id, characterId = order.buyer_character_id,
         definitionId = tonumber(order.definition_id), itemName = order.item_name, quantity = tonumber(order.quantity) })
     local stored = MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', { order.order_id })
+    chargedOnce = chargedOnce and stored and stored.to_account_id == sink.value.accountId
     local sameDelivery = false
     if stored and stored.fulfillment_json and delivered.ok then
         local decoded, original = pcall(json.decode, stored.fulfillment_json)
@@ -145,9 +150,10 @@ RegisterCommand('ShopPurchaseLiveTest', function(source, args)
     local passed = result.value.state == 'fulfilled' and replayed.ok and replayed.value.replayed == true
         and replayed.value.transactionId == result.value.transactionId and chargedOnce
         and delivered.ok and delivered.value.replayed == true and sameDelivery
-    print(('[ShopPurchaseLiveTest] %s order=%s state=%s amount=%s chargedOnce=%s replayed=%s fulfillmentReplayed=%s sameInstances=%s walletFinal=%s'):format(
+    print(('[ShopPurchaseLiveTest] %s order=%s state=%s amount=%s chargedOnce=%s replayed=%s fulfillmentReplayed=%s sameInstances=%s walletFinal=%s settlementType=%s settlementOwner=%s settlementFinal=%s'):format(
         passed and 'PASS' or 'FAIL', order.order_id, result.value.state, tostring(total),
         tostring(chargedOnce), tostring(replayed.ok and replayed.value.replayed),
         tostring(delivered.ok and delivered.value.replayed), tostring(sameDelivery),
-        tostring(walletAfter.ok and walletAfter.value.balance)))
+        tostring(walletAfter.ok and walletAfter.value.balance), tostring(sink.value.accountType),
+        tostring(sink.value.ownerId), tostring(sinkAfter.ok and sinkAfter.value.balance)))
 end, true)

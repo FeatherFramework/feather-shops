@@ -363,3 +363,79 @@ repeat the same client command to exercise its persisted request. No fresh quote
 or funding is needed. Uncertain failures preserve the saved request; share the
 error and retain that ID rather than creating another purchase to recover.
 Player-owned shops, selling, management UI, and NPC buying are deferred.
+## Canonical organization links
+
+Shops now depends on Organizations Contract 1 and the installed Admin service
+policy. Start Admin and Organizations before Shops. Configured organization
+bootstrap keys/names are immutable request payloads, not runtime rename settings.
+Startup creates/replays a business identity, activates/replays its original
+activation and persists `shop_organization_links` with its canonical UUID.
+Existing links cannot be rebound. Failure between organization creation and local
+link commit is recovered by original request replay, not shadow IDs or dual writes.
+GetCatalog includes `organizationId`; public location projections remain unchanged.
+Shops has non-privileged creator/mutator and creator-scoped audit trust; Admin policy
+grants it only create/update actions. Restart does not resume a suspended/dissolved
+organization: activation replay is a historical receipt, not a new lifecycle edit.
+New payments now use Economy's organization treasury accounts; existing accepted
+payment destinations remain fixed. Recipe/deployment integration must add
+Organizations and the configured Admin service policy before Shops.
+After manifest changes run `refresh` and restart the touched resources. Run
+`ShopOrganizationContractSmokeTest` for 8 read-only checks with the default shop,
+then restart Shops and repeat to verify stable linkage and bootstrap audit counts.
+
+New quote creation and quote validation now require the canonical business to
+currently resolve as active. Missing/unavailable/malformed identity fails closed;
+pending/suspended/dissolving/dissolved businesses reject `organization_inactive`.
+Quote validation is used before first durable payment intent; existing intents
+remain recoverable without a current quote/business-status gate, preserving prior
+delivery/refund obligations. Organization UUID participates in catalog revision.
+These are last-look API checks, not a cross-domain transaction with suspension.
+Client startup waits on replicated server readiness before requesting the catalog;
+the signal is only a timing hint, never authorization. Run
+`ShopOrganizationCommerceContractSmokeTest` for 11 read-only checks. Recorded
+commerce lifecycle and startup-warning results follow.
+Commerce contract acceptance passed 11/11 and restart catalog warnings were absent.
+Admin's `ShopOrganizationLifecycleLiveTest <nearby buyer source> <stable requestId>`
+prepares a quote, suspends the linked business, verifies new quote/validation/order
+rejection with unchanged buyer balances and no order, then resumes and quotes again.
+Admin quote/order trust is installed only in Shops DevMode; no payment API trust is
+added. The console-only test uses Admin's existing policy/privileged lifecycle
+authority and attempts resume on failure. Repeat its original ID to check historical
+receipt replay (not a fresh lifecycle gate test). Run without unrelated transactions
+for reliable before/after balance comparisons. It inspects the latest 50 audit
+events to recover original lifecycle revisions; missing historical evidence fails
+closed on request binding rather than silently issuing replacement requests.
+Live lifecycle quote/order gating passed with unchanged balances, no persisted
+order and business resumed. Historical receipt replay passed without fresh changes.
+
+For controlled inactive-business recovery acceptance, dev-only
+`ShopReconciliationTestControl pause|resume` temporarily pauses worker polling.
+Pause before creating a fresh interrupted order; it cannot cancel in-flight work.
+Restart clears the pause. Admin's console-only `ShopBusinessLifecycleControl
+suspend|resume <stable requestId> <expected revision>` changes only the first
+configured shop's canonical organization using normal policy/ownership checks.
+Retain original IDs/revisions on retries. Always resume both business and worker
+after testing. No default reconciliation configuration is changed.
+Worker recovery of an already-paid order while suspended passed: fulfillment
+completed, exact replay produced no second charge or grant, and wallet remained
+200. Business resumed at revision 6 and worker resumed; closing audit passed 5/5.
+# Business treasury settlement
+
+New payment intents resolve the linked organization's currency treasury through
+Economy's allowlisted provisioning API. The final quote and business lifecycle
+checks still precede intent acceptance. Payment intent stores the chosen account
+UUID permanently; recovery and refunds use that original destination, never the
+current catalog. Previously accepted system-sink orders are not migrated or
+recharged. No fallback to the shared sink is permitted for new purchases.
+
+`ShopPurchaseLiveTest` verifies the wallet debit, destination credit, stored
+destination, exact replay, and stable delivery instances, and reports settlement
+type, owner, and balance. Existing recovery and refund tests use stored accounts,
+including while a business is inactive. Organization lifecycle lookup remains a
+last-look check rather than an atomic cross-resource suspension/payment fence.
+Treasury management and withdrawals are not exposed to players in this slice.
+Live treasury purchase acceptance passed with amount=200, chargedOnce=true,
+stable delivery instances, and canonical business treasury credit=200. Undelivered
+treasury refund restored the buyer's 200 exactly once and blocked delivery.
+Final journal audit passed 5/5 with pending=0 and published=60. Treasury purchase
+and refund recovery across server restart remains the next acceptance gate.

@@ -14,6 +14,10 @@ end
 local health = { state = 'booting', phase = 'configuration', contract = 1,
     version = GetResourceMetadata(GetCurrentResourceName(), 'version', 0), checks = {} }
 local catalog = {}
+GlobalState['feather-shops:ready']=false
+AddEventHandler('onResourceStop',function(resource)
+    if resource==GetCurrentResourceName() then GlobalState['feather-shops:ready']=false end
+end)
 local function Uuid(value)
     return type(value) == 'string' and value:match(
         '^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$') ~= nil
@@ -59,6 +63,12 @@ local function Validate()
             return Err('invalid_config', 'A configured shop is invalid.')
         end
         ids[shop.id] = true
+        local identity=shop.organization
+        if type(identity)~='table' or type(identity.key)~='string' or #identity.key>64
+            or not identity.key:match('^[a-z][a-z0-9_]*$') or not Text(identity.legalName,160) or not Text(identity.displayName,100)
+            or identity.legalName:find('%c') or identity.displayName:find('%c') then
+            return Err('invalid_config','Shop organization bootstrap identity is invalid.')
+        end
         for _, offer in ipairs(shop.offers) do
             if type(offer) ~= 'table' or not Uuid(offer.id) or offerIds[offer.id]
                 or offer.id ~= offer.id:lower() or not Text(offer.label, 100)
@@ -175,7 +185,7 @@ exports('GetCapabilities', function()
         version = health.version, features = { lifecycle = 1, migrations = 1,
             catalog = 1, quotes = 1, durableOrders = 1,
             payments = 1, fulfillment = 1, playerPurchases = 1,
-            compensation = 1, reconciliation = 1, playerShops = 0 } })
+            compensation = 1, reconciliation = 1, organizationLinks = 1, playerShops = 0 } })
 end)
 exports('ListShops', ListShops)
 exports('GetCatalog', GetCatalog)
@@ -193,7 +203,7 @@ CreateThread(function()
         local configured = Validate()
         if not configured.ok then return configured end
         health.checks.configuration = true
-        for _, dependency in ipairs({ 'feather-core', 'feather-economy' }) do
+        for _, dependency in ipairs({ 'feather-core', 'feather-economy', 'feather-organizations' }) do
             health.phase = 'waiting_for_' .. dependency
             local ready = exports[dependency]:AwaitReady(Config.ReadinessTimeoutMs)
             if type(ready) ~= 'table' or not ready.ok then
@@ -221,6 +231,15 @@ CreateThread(function()
         health.phase = 'catalog'
         local synchronized = Synchronize()
         if not synchronized.ok then return synchronized end
+        health.phase='organization_links'
+        local organizationDeadline=GetGameTimer()+Config.ReadinessTimeoutMs
+        while not ShopOrganizations and GetGameTimer()<organizationDeadline do Wait(0) end
+        if not ShopOrganizations then return Err('startup_failed','Shop organization link service did not load.') end
+        local linked=ShopOrganizations.Start()
+        if not linked.ok then return linked end
+        health.checks.organizations=true
+        health.checks.migrations.applied=health.checks.migrations.applied+linked.value.applied
+        for _,shop in ipairs(Config.Shops) do catalog[shop.id].organizationId=ShopOrganizations.GetId(shop.id) end
         health.phase = 'order_migrations'
         local moduleDeadline = GetGameTimer() + Config.ReadinessTimeoutMs
         while not ShopOrders and GetGameTimer() < moduleDeadline do Wait(0) end
@@ -254,6 +273,7 @@ CreateThread(function()
         return
     end
     health.state, health.phase = 'ready', 'ready'
+    GlobalState['feather-shops:ready']=true
     Log('startup.ready', { shops = #Config.Shops, migrationsApplied = health.checks.migrations.applied })
 end)
 

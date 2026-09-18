@@ -437,5 +437,40 @@ Treasury management and withdrawals are not exposed to players in this slice.
 Live treasury purchase acceptance passed with amount=200, chargedOnce=true,
 stable delivery instances, and canonical business treasury credit=200. Undelivered
 treasury refund restored the buyer's 200 exactly once and blocked delivery.
-Final journal audit passed 5/5 with pending=0 and published=60. Treasury purchase
-and refund recovery across server restart remains the next acceptance gate.
+Final journal audit for that checkpoint passed 5/5 with pending=0 and published=60.
+Treasury purchase and refund recovery across full server restart subsequently
+passed, as did both flows while the buyer was offline and reconnected on a changed
+source (2026-09-18). Exact retries preserved charge/refund and delivery identities;
+offline refunded delivery remained blocked. Closing audit passed 5/5, pending=0,
+published=68. These results are manual development acceptance, not blanket release readiness.
+
+## Competing purchase development test
+
+`ShopPurchaseConcurrencyTest <nearby buyer source> <fresh requestId>` requires
+DevMode, an active business, and a wallet containing exactly the first offer's
+two-item price (200 dollars minor units for default apples). Stay near the shop,
+keep the session unchanged, and avoid unrelated purchases or funding during the
+test. Two ordinary prepared orders share one valid quote, with separate `:a`/`:b`
+request IDs, and run concurrently through the real purchase coordinator.
+
+The test expects one fulfillment and one insufficient-funds rejection, checks
+treasury credit/wallet conservation and stored destinations, then verifies both
+outcome replays and the winner's original Inventory instance receipt. The losing
+execution must have no payment UUID or fulfillment receipt. It adds no Inventory
+API and never writes Inventory or Economy tables. A pass purchases two real items
+and leaves the wallet empty; it does not restore funds or remove items.
+
+Fresh IDs are required; this is not a restart/replay harness. Failure prints order
+IDs for inspection, not instructions to invent replacement IDs. A timed-out call
+may still finish; restart before another concurrency test, and inspect/recover
+original orders first. Pausing the worker is recommended for isolated testing;
+always resume it afterward.
+
+Live concurrency acceptance passed with `shop-concurrency-002`: one fulfilled
+purchase, one insufficient-funds rejection, treasury delta=200, wallet=0, stable
+winner delivery replay, and no losing execution fulfillment. Worker resumed;
+closing journal audit passed 5/5 with pending=0 and published=71 (2026-09-18).
+The first run had one pre-intent internal error and one fulfilled purchase; winner
+replay verified no duplicates. Its underlying database cause was not established.
+Checkout now reads existing wallets/treasuries before provisioning only missing
+accounts, avoiding unnecessary provisioning locks. No Inventory API was added.

@@ -55,10 +55,18 @@ local function Execution(orderId)
     return MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', { orderId })
 end
 local function Wallet(characterId, currency)
-    local found = exports['feather-economy']:EnsureCharacterWallets({ characterId = characterId })
-    if type(found) ~= 'table' or not found.ok then return found end
+    local found = exports['feather-economy']:FindAccountsByOwner({ ownerType = 'character', ownerId = characterId })
+    if type(found) ~= 'table' or not found.ok then return found or Err('dependency_unavailable', 'Wallet lookup failed.') end
     for _, account in ipairs(found.value) do
-        if account.currency == currency then return Ok(account) end
+        if account.currency == currency and account.accountType == 'wallet' then
+            if account.status ~= 'open' then return Err('account_closed', 'Buyer wallet is closed.') end
+            return Ok(account)
+        end
+    end
+    local ensured = exports['feather-economy']:EnsureCharacterWallets({ characterId = characterId })
+    if type(ensured) ~= 'table' or not ensured.ok then return ensured or Err('dependency_unavailable', 'Wallet provisioning failed.') end
+    for _, account in ipairs(ensured.value) do
+        if account.currency == currency and account.accountType == 'wallet' and account.status == 'open' then return Ok(account) end
     end
     return Err('account_not_found', 'Buyer currency wallet missing.')
 end

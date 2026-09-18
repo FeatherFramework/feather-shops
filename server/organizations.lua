@@ -16,6 +16,17 @@ function ShopOrganizations.Settlement(shopId,currency,orderId)
     end
     local id=links[shopId]
     if not ShopService.Uuid(id) then return Err('dependency_unavailable','Business treasury identity unavailable.') end
+    -- Checkout is a read when the treasury already exists; no repeated write locks.
+    -- Commerce eligibility is independently checked before accepting new intent.
+    local found=exports['feather-economy']:FindAccountsByOwner({ownerType='organization',ownerId=id})
+    if type(found)~='table' or not found.ok then return found or Err('dependency_unavailable','Treasury lookup failed.') end
+    for _,account in ipairs(found.value) do
+        if account.currency==currency and account.accountType=='treasury' and account.ownerType=='organization'
+            and account.ownerId==id and ShopService.Uuid(account.accountId) then
+            if account.status~='open' then return Err('account_closed','Business treasury is closed.') end
+            return Ok(account)
+        end
+    end
     local ensured=exports['feather-economy']:EnsureOrganizationTreasuries({organizationId=id})
     if type(ensured)~='table' or not ensured.ok then return ensured or Err('dependency_unavailable','Treasury provisioning failed.') end
     for _,account in ipairs(ensured.value) do

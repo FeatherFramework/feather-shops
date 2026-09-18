@@ -98,7 +98,7 @@ local function Coordinate(order, source, checkpoint, recovery)
         end
         local wallet = Wallet(order.buyer_character_id, order.currency_code)
         if type(wallet) ~= 'table' or not wallet.ok then return wallet or Err('dependency_unavailable', 'Wallet lookup failed.') end
-        local sink = exports['feather-economy']:GetSystemAccount({ currency = order.currency_code, accountType = 'system_sink' })
+        local sink = ShopOrganizations.Settlement(order.shop_id, order.currency_code)
         if type(sink) ~= 'table' or not sink.ok then return sink or Err('dependency_unavailable', 'Settlement lookup failed.') end
         if not Current() then return Err('session_expired', 'Buyer session changed.') end
         validated = ShopQuotes.Validate(order.quote_id, source)
@@ -293,7 +293,7 @@ if Config.DevMode then
         if not wallet or not wallet.ok or wallet.value.balance >= offer.unitPrice * 2 then
             print('[ShopPurchaseInsufficientTest] FAIL test requires wallet below purchase price; no purchase attempted'); return
         end
-        local sink = exports['feather-economy']:GetSystemAccount({ currency = offer.currency, accountType = 'system_sink' })
+        local sink = ShopOrganizations.Settlement(shop.id, offer.currency)
         if not sink.ok then print('[ShopPurchaseInsufficientTest] FAIL settlement unavailable'); return end
         local quoted = ShopQuotes.Create({ shopId = shop.id, offerId = offer.id, quantity = 2 }, target)
         if not quoted.ok then print('[ShopPurchaseInsufficientTest] FAIL quote=' .. quoted.code); return end

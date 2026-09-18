@@ -415,3 +415,18 @@ suspend|resume <stable requestId> <expected revision>` changes only the first
 configured shop's canonical organization using normal policy/ownership checks.
 Retain original IDs/revisions on retries. Always resume both business and worker
 after testing. No default reconciliation configuration is changed.
+# Business treasury settlement
+
+New payment intents resolve the linked organization's currency treasury through
+Economy's allowlisted provisioning API. The final quote and business lifecycle
+checks still precede intent acceptance. Payment intent stores the chosen account
+UUID permanently; recovery and refunds use that original destination, never the
+current catalog. Previously accepted system-sink orders are not migrated or
+recharged. No fallback to the shared sink is permitted for new purchases.
+
+`ShopPurchaseLiveTest` verifies the wallet debit, destination credit, stored
+destination, exact replay, and stable delivery instances, and reports settlement
+type, owner, and balance. Existing recovery and refund tests use stored accounts,
+including while a business is inactive. Organization lifecycle lookup remains a
+last-look check rather than an atomic cross-resource suspension/payment fence.
+Treasury management and withdrawals are not exposed to players in this slice.

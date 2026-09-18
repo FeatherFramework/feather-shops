@@ -8,6 +8,22 @@ local schema=[[CREATE TABLE IF NOT EXISTS `shop_organization_links` (
     CONSTRAINT `fk_shop_organization_location` FOREIGN KEY (`shop_id`) REFERENCES `shop_locations` (`shop_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci]]
 function ShopOrganizations.GetId(shopId) return links[shopId] end
+function ShopOrganizations.Settlement(shopId,currency,orderId)
+    -- Stored intent fixes the destination permanently, including old sink orders.
+    if orderId then
+        local execution=MySQL.single.await('SELECT `to_account_id` FROM `shop_order_executions` WHERE `order_id`=?',{orderId})
+        if execution then return exports['feather-economy']:GetAccount({accountId=execution.to_account_id}) end
+    end
+    local id=links[shopId]
+    if not ShopService.Uuid(id) then return Err('dependency_unavailable','Business treasury identity unavailable.') end
+    local ensured=exports['feather-economy']:EnsureOrganizationTreasuries({organizationId=id})
+    if type(ensured)~='table' or not ensured.ok then return ensured or Err('dependency_unavailable','Treasury provisioning failed.') end
+    for _,account in ipairs(ensured.value) do
+        if account.currency==currency and account.accountType=='treasury' and account.ownerType=='organization'
+            and account.ownerId==id and account.status=='open' and ShopService.Uuid(account.accountId) then return Ok(account) end
+    end
+    return Err('account_not_found','Business currency treasury unavailable.')
+end
 function ShopOrganizations.CommerceState(result,id)
     if type(result)~='table' or result.ok~=true or type(result.value)~='table'
         or result.value.organizationId~=id or result.value.organizationType~='business' then

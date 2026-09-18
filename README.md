@@ -376,8 +376,9 @@ GetCatalog includes `organizationId`; public location projections remain unchang
 Shops has non-privileged creator/mutator and creator-scoped audit trust; Admin policy
 grants it only create/update actions. Restart does not resume a suspended/dissolved
 organization: activation replay is a historical receipt, not a new lifecycle edit.
-Organization treasury accounts remain a separate next slice. Existing payment destinations and durable order recovery
-remain unchanged. Recipe/deployment integration must add Organizations before Shops.
+New payments now use Economy's organization treasury accounts; existing accepted
+payment destinations remain fixed. Recipe/deployment integration must add
+Organizations and the configured Admin service policy before Shops.
 After manifest changes run `refresh` and restart the touched resources. Run
 `ShopOrganizationContractSmokeTest` for 8 read-only checks with the default shop,
 then restart Shops and repeat to verify stable linkage and bootstrap audit counts.
@@ -391,8 +392,8 @@ delivery/refund obligations. Organization UUID participates in catalog revision.
 These are last-look API checks, not a cross-domain transaction with suspension.
 Client startup waits on replicated server readiness before requesting the catalog;
 the signal is only a timing hint, never authorization. Run
-`ShopOrganizationCommerceContractSmokeTest` for 11 read-only checks. Real quote,
-purchase/recovery lifecycle behavior and restart warning absence remain pending.
+`ShopOrganizationCommerceContractSmokeTest` for 11 read-only checks. Recorded
+commerce lifecycle and startup-warning results follow.
 Commerce contract acceptance passed 11/11 and restart catalog warnings were absent.
 Admin's `ShopOrganizationLifecycleLiveTest <nearby buyer source> <stable requestId>`
 prepares a quote, suspends the linked business, verifies new quote/validation/order
@@ -415,6 +416,9 @@ suspend|resume <stable requestId> <expected revision>` changes only the first
 configured shop's canonical organization using normal policy/ownership checks.
 Retain original IDs/revisions on retries. Always resume both business and worker
 after testing. No default reconciliation configuration is changed.
+Worker recovery of an already-paid order while suspended passed: fulfillment
+completed, exact replay produced no second charge or grant, and wallet remained
+200. Business resumed at revision 6 and worker resumed; closing audit passed 5/5.
 # Business treasury settlement
 
 New payment intents resolve the linked organization's currency treasury through
@@ -430,3 +434,8 @@ type, owner, and balance. Existing recovery and refund tests use stored accounts
 including while a business is inactive. Organization lifecycle lookup remains a
 last-look check rather than an atomic cross-resource suspension/payment fence.
 Treasury management and withdrawals are not exposed to players in this slice.
+Live treasury purchase acceptance passed with amount=200, chargedOnce=true,
+stable delivery instances, and canonical business treasury credit=200. Undelivered
+treasury refund restored the buyer's 200 exactly once and blocked delivery.
+Final journal audit passed 5/5 with pending=0 and published=60. Treasury purchase
+and refund recovery across server restart remains the next acceptance gate.

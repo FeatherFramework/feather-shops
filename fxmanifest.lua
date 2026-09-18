@@ -6,7 +6,7 @@ lua54 'yes'
 name 'feather-shops'
 description 'Authoritative commerce workflows for the Feather Framework'
 author 'Feather Framework'
-version '0.1.1'
+version '0.1.2'
 shops_dev_tests 'true'
 
 client_script 'client/quote_tests.lua'

@@ -17,6 +17,7 @@ server_scripts {
     '@oxmysql/lib/MySQL.lua',
     'config.lua',
     'server/main.lua',
+    'server/organizations.lua',
     'server/quotes.lua',
     'server/orders.lua',
     'server/fulfillment.lua',
@@ -27,4 +28,4 @@ server_scripts {
     'server/player_routes.lua'
 }
 
-dependencies { 'oxmysql', 'feather-core', 'feather-economy', 'feather-inventory', 'feather-toolkit', 'feather-menu-v2' }
+dependencies { 'oxmysql', 'feather-core', 'feather-economy', 'feather-organizations', 'feather-inventory', 'feather-toolkit', 'feather-menu-v2' }

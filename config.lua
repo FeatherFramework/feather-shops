@@ -13,6 +13,7 @@ Config = {
         {
             id = '00000000-0000-4000-8000-000000000001',
             label = 'Valentine General Store',
+            organization = { key='valentine_general_store', legalName='Valentine General Store Company', displayName='Valentine General Store' },
             position = { x = -322.13, y = 803.65, z = 117.88 },
             heading = 0.0,
             offers = {
@@ -28,3 +29,6 @@ Config = {
         }
     }
 }
+
+-- Development acceptance only; no Admin quote/order trust in production mode.
+if Config.DevMode then Config.Quotes.trustedCallers['feather-admin']=true end

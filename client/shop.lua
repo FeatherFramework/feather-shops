@@ -154,7 +154,7 @@ CreateThread(function()
     if type(ready) ~= 'table' or not ready.ok then Message('Core not ready.'); return end
     local deadline, snapshot = GetGameTimer() + 30000
     repeat
-        snapshot = Call('shops.catalog.v1', {})
+        if GlobalState['feather-shops:ready']==true then snapshot = Call('shops.catalog.v1', {}) end
         if type(snapshot) == 'table' and snapshot.ok then break end
         Wait(1000)
     until GetGameTimer() >= deadline

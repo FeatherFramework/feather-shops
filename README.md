@@ -474,3 +474,29 @@ The first run had one pre-intent internal error and one fulfilled purchase; winn
 replay verified no duplicates. Its underlying database cause was not established.
 Checkout now reads existing wallets/treasuries before provisioning only missing
 accounts, avoiding unnecessary provisioning locks. No Inventory API was added.
+
+After full server restart, `ShopPurchaseConcurrencyReplayTest 2
+shop-concurrency-002` passed using the original pair: the fulfilled winner replayed
+the same payment and Inventory instances, the loser remained rejected without
+payment or fulfillment, and wallet=0/treasury=1000 stayed unchanged. Closing
+journal audit again passed 5/5 with pending=0 and published=71. This replay command
+requires the original buyer and existing pair; it never funds or prepares orders.
+
+## Delivery versus refund concurrency
+
+`ShopDeliveryRefundConcurrencyTest <source> <paid-undelivered requestId>
+[delivery-first|refund-first]` races the existing purchase and compensation
+coordinators. Exactly one contender enters the per-order runtime mutex; retrying
+both sides then proves Inventory's durable grant/cancellation receipt fixes one
+terminal outcome. The command requires the original active buyer and never creates,
+funds, or retargets an order. Use the existing recovery test to prepare the paid
+undelivered order and pause the worker during the race.
+
+Both orderings passed live and across restart on 2026-09-18. Delivery-first
+fulfilled instances 105/106, refused refund, and retained wallet=0/treasury=1200.
+Refund-first restored wallet=200, returned treasury=1200, and permanently blocked
+delivery. Terminal replay changed no balances or items. The first delivery-first
+run exposed an overly strict test assertion because fulfilled orders reject
+compensation before creating a `delivery_committed` compensation row; the durable
+Inventory delivered receipt and fulfilled execution are the terminal evidence.
+The corrected replay passed. Closing audit passed 5/5, pending=0, published=76.

@@ -89,6 +89,61 @@ RegisterCommand('ShopPurchaseConcurrencyTest',function(source,args)
         print('[ShopPurchaseConcurrencyTest] FAIL '..tostring(failure)..' orders='..json.encode(ids)..'; inspect existing orders before any retry')
     end
 end,true)
+RegisterCommand('ShopPurchaseConcurrencyReplayTest',function(source,args)
+    if source~=0 then return end
+    local target,base=tonumber(args[1]),args[2]
+    if #args~=2 or not ShopService.Integer(target,1,65535) or type(base)~='string'
+        or #base>110 or not base:match('^[A-Za-z0-9][A-Za-z0-9._:%-]*$') then
+        print('[ShopPurchaseConcurrencyReplayTest] usage: ShopPurchaseConcurrencyReplayTest <active buyer source> <existing requestId>');return
+    end
+    local called,failure=xpcall(function()
+        assert(ShopService.IsReady(),'Shops not ready')
+        local session=exports['feather-core']:GetSessionContext(target)
+        assert(type(session)=='table' and session.ok,'Active buyer session required')
+        local orders={}
+        for index,suffix in ipairs({'a','b'}) do
+            orders[index]=MySQL.single.await([[SELECT o.*,e.`state` AS execution_state,e.`payment_transaction_id`,
+                e.`fulfillment_json`,e.`from_account_id`,e.`to_account_id`,e.`amount`
+                FROM `shop_orders` o INNER JOIN `shop_order_executions` e ON e.`order_id`=o.`order_id`
+                WHERE o.`source_resource`='feather-shops' AND o.`request_id`=?]],{base..':'..suffix})
+            assert(orders[index] and orders[index].buyer_character_id==session.value.characterId
+                and orders[index].buyer_account_id==session.value.accountId,'Original buyer concurrency order required')
+        end
+        local winner,loser
+        for _,order in ipairs(orders) do
+            if order.execution_state=='fulfilled' then winner=order
+            elseif order.execution_state=='rejected' and order.payment_transaction_id==nil
+                and order.fulfillment_json==nil then loser=order end
+        end
+        assert(winner and loser,'Expected one fulfilled and one uncharged rejected execution')
+        assert(winner.from_account_id==loser.from_account_id and winner.to_account_id==loser.to_account_id,
+            'Concurrency pair account binding changed')
+        local walletBefore=exports['feather-economy']:GetAccount({accountId=winner.from_account_id})
+        local treasuryBefore=exports['feather-economy']:GetAccount({accountId=winner.to_account_id})
+        assert(walletBefore.ok and treasuryBefore.ok,'Settlement accounts unavailable')
+        local won=ShopPurchases.Purchase(winner.order_id,target)
+        local denied=ShopPurchases.Purchase(loser.order_id,target)
+        assert(won.ok and won.value.replayed==true and won.value.transactionId==winner.payment_transaction_id,
+            'Winner did not replay original payment')
+        assert(not denied.ok and denied.code=='insufficient_funds','Rejected loser outcome changed')
+        local grant=exports['feather-inventory']:GrantCharacterItemOnce({
+            grantId='shop-fulfillment:'..winner.order_id,characterId=winner.buyer_character_id,
+            itemName=winner.item_name,definitionId=tonumber(winner.definition_id),quantity=tonumber(winner.quantity)})
+        local decoded,receipt=pcall(json.decode,winner.fulfillment_json or '')
+        assert(grant.ok and grant.value.replayed==true and decoded and type(receipt)=='table'
+            and json.encode(grant.value.instanceIds)==json.encode(receipt.instanceIds),'Winner delivery identity changed')
+        local walletAfter=exports['feather-economy']:GetAccount({accountId=winner.from_account_id})
+        local treasuryAfter=exports['feather-economy']:GetAccount({accountId=winner.to_account_id})
+        assert(walletAfter.ok and treasuryAfter.ok and walletAfter.value.balance==walletBefore.value.balance
+            and treasuryAfter.value.balance==treasuryBefore.value.balance,'Replay changed balances')
+        local loserAfter=MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?',{loser.order_id})
+        assert(loserAfter and loserAfter.state=='rejected' and loserAfter.payment_transaction_id==nil
+            and loserAfter.fulfillment_json==nil,'Rejected loser acquired effects')
+        print(('[ShopPurchaseConcurrencyReplayTest] PASS winner=%s loser=%s winnerReplayed=true sameInstances=true loserStillRejected=true balancesUnchanged=true wallet=%s treasury=%s'):format(
+            winner.order_id,loser.order_id,tostring(walletAfter.value.balance),tostring(treasuryAfter.value.balance)))
+    end,debug.traceback)
+    if not called then print('[ShopPurchaseConcurrencyReplayTest] FAIL '..tostring(failure)) end
+end,true)
 RegisterCommand('ShopPurchaseRecoveryTest', function(source, args)
     if source ~= 0 then return end
     if not ShopService.IsReady() then print('[ShopPurchaseRecoveryTest] FAIL service not ready'); return end

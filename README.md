@@ -3,6 +3,15 @@
 Feather-native commerce service. Original BCC Shops is reference only; this
 resource has no VORP compatibility layer or legacy table dependency.
 
+Shipped defaults are production-safe: `Config.DevMode=false` and manifest metadata
+`shops_dev_tests 'false'`. Server/client acceptance commands are not registered in
+that profile. `ShopPurchaseState`, `ShopReconciliationState`, health/capability
+exports, and the read-only `ShopReleaseContractSmokeTest` remain available to the
+server console. To run development acceptance locally, deliberately enable both
+flags and restart (run `refresh` if manifest metadata changed); disable both and
+restart before packaging. DevMode also grants Admin quote/order test trust, so it
+must not be enabled merely for diagnostics.
+
 ## Foundation slice
 
 - Contract 1 result envelopes, health, capabilities, and bounded readiness.

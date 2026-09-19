@@ -44,7 +44,7 @@ CreateThread(function()
         end
     end
 end)
-RegisterCommand('ShopReconciliationTestControl',function(source,args)
+ShopService.RegisterDevCommand('ShopReconciliationTestControl',function(source,args)
     if source~=0 or not Config.DevMode then return end
     if #args~=1 or (args[1]~='pause' and args[1]~='resume') then
         print('[ShopReconciliationTestControl] FAIL use pause|resume');return

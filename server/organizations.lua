@@ -93,7 +93,7 @@ function ShopOrganizations.Start()
     links=resolved
     return Ok({applied=stored and 0 or 1})
 end
-RegisterCommand('ShopOrganizationContractSmokeTest',function(source)
+ShopService.RegisterDevCommand('ShopOrganizationContractSmokeTest',function(source)
     if source~=0 then return end
     local called,reason=xpcall(function()
         assert(ShopService.IsReady(),'Shop service not ready')
@@ -133,7 +133,7 @@ RegisterCommand('ShopOrganizationContractSmokeTest',function(source)
     if not called then print('[ShopOrganizationContractSmokeTest] FAIL '..tostring(reason)) end
 end,true)
 
-RegisterCommand('ShopOrganizationCommerceContractSmokeTest',function(source)
+ShopService.RegisterDevCommand('ShopOrganizationCommerceContractSmokeTest',function(source)
     if source~=0 then return end
     local called,reason=xpcall(function()
         assert(ShopService.IsReady(),'Shops not ready')

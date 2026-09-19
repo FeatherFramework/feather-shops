@@ -141,7 +141,7 @@ function ShopPlayerRoutes.Start()
     end
     return Ok(true)
 end
-RegisterCommand('ShopPlayerRouteContractSmokeTest', function(source)
+ShopService.RegisterDevCommand('ShopPlayerRouteContractSmokeTest', function(source)
     if source ~= 0 then return end
     if not ShopService.IsReady() then print('[ShopPlayerRouteContractSmokeTest] FAIL service not ready'); return end
     local listed = exports['feather-core']:GetRpcRoutes()

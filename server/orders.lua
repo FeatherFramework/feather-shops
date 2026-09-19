@@ -136,7 +136,7 @@ exports('PrepareOrder', function(request, source)
 end)
 ShopOrders.Prepare = Prepare
 
-RegisterCommand('ShopOrderContractSmokeTest', function(source)
+ShopService.RegisterDevCommand('ShopOrderContractSmokeTest', function(source)
     if source ~= 0 then return end
     if not ShopService.IsReady() then print('[ShopOrderContractSmokeTest] FAIL service not ready'); return end
     local unauthorized = Prepare({}, 1, 'untrusted-test-resource')
@@ -161,7 +161,7 @@ RegisterCommand('ShopOrderContractSmokeTest', function(source)
     end
     print(('[ShopOrderContractSmokeTest] done %d/%d passed (no funds moved)'):format(passed, #tests))
 end, true)
-RegisterCommand('ShopOrderPersistenceTest', function(source, args)
+ShopService.RegisterDevCommand('ShopOrderPersistenceTest', function(source, args)
     if source ~= 0 then return end
     local target, requestId, operation = tonumber(args[1]), args[2], args[3]
     if not target or not RequestId(requestId) or (operation ~= 'prepare' and operation ~= 'retry') then

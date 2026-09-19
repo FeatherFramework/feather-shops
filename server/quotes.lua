@@ -167,7 +167,7 @@ CreateThread(function()
     end
 end)
 
-RegisterCommand('ShopQuoteContractSmokeTest', function(source)
+ShopService.RegisterDevCommand('ShopQuoteContractSmokeTest', function(source)
     if source ~= 0 then return end
     if not ShopService.IsReady() then print('[ShopQuoteContractSmokeTest] FAIL service not ready'); return end
     local shop = Config.Shops[1]
@@ -199,7 +199,7 @@ RegisterCommand('ShopQuoteContractSmokeTest', function(source)
     end
     print(('[ShopQuoteContractSmokeTest] done %d/%d passed (no funds moved)'):format(passed, #tests))
 end, true)
-RegisterCommand('ShopQuoteLiveTest', function(source, args)
+ShopService.RegisterDevCommand('ShopQuoteLiveTest', function(source, args)
     if source ~= 0 then return end
     local target = tonumber(args[1])
     local shop = Config.Shops[1]

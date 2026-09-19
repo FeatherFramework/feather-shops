@@ -1,6 +1,6 @@
 Config = {
     Contract = 1,
-    DevMode = true,
+    DevMode = false,
     ReadinessTimeoutMs = 30000,
     MaximumOffersPerShop = 100,
     Reconciliation = { enabled = true, pollIntervalMs = 5000, retryDelaySeconds = 15, batchSize = 10 },

@@ -179,6 +179,9 @@ local function GetCatalog(shopId)
 end
 ShopService = { Ok = Ok, Err = Err, Copy = Copy, Integer = Integer,
     Uuid = Uuid, GetCatalog = GetCatalog, ListShops = ListShops, IsReady = function() return health.state == 'ready' end }
+function ShopService.RegisterDevCommand(name,handler,restricted)
+    if Config.DevMode then RegisterCommand(name,handler,restricted==true) end
+end
 exports('GetHealth', function() return Ok(Copy(health)) end)
 exports('GetCapabilities', function()
     return Ok({ resource = 'feather-shops', contract = 1, state = health.state,
@@ -277,7 +280,7 @@ CreateThread(function()
     Log('startup.ready', { shops = #Config.Shops, migrationsApplied = health.checks.migrations.applied })
 end)
 
-RegisterCommand('ShopFoundationSmokeTest', function(source)
+ShopService.RegisterDevCommand('ShopFoundationSmokeTest', function(source)
     if source ~= 0 then return end
     if health.state ~= 'ready' then
         print('[ShopFoundationSmokeTest] FAIL service not ready ' .. json.encode(health))
@@ -318,3 +321,43 @@ RegisterCommand('ShopFoundationSmokeTest', function(source)
     end
     print(('[ShopFoundationSmokeTest] done %d/%d passed (read-only)'):format(passed, #tests))
 end, true)
+
+RegisterCommand('ShopReleaseContractSmokeTest',function(source)
+    if source~=0 then return end
+    local forbidden={
+        ShopFoundationSmokeTest=true,ShopQuoteContractSmokeTest=true,ShopQuoteLiveTest=true,
+        ShopOrderContractSmokeTest=true,ShopOrderPersistenceTest=true,
+        ShopOrganizationContractSmokeTest=true,ShopOrganizationCommerceContractSmokeTest=true,
+        ShopPlayerRouteContractSmokeTest=true,ShopReconciliationTestControl=true,
+        ShopPurchaseInsufficientTest=true,ShopFulfillmentLiveTest=true,
+        ShopPurchaseConcurrencyTest=true,ShopPurchaseConcurrencyReplayTest=true,
+        ShopPurchaseRecoveryTest=true,ShopPurchaseLiveTest=true,ShopRefundDeliveredTest=true,
+        ShopDeliveryRefundConcurrencyTest=true,ShopRefundLiveTest=true,ShopCompensationFenceTest=true
+    }
+    local registered={}
+    local callable=type(GetRegisteredCommands)=='function'
+    if callable then
+        for _,command in ipairs(GetRegisteredCommands() or {}) do
+            local name=type(command)=='table' and command.name or nil
+            if type(name)=='string' then registered[name]=true end
+        end
+    end
+    local forbiddenAbsent=callable
+    if callable then for name in pairs(forbidden) do if registered[name] then forbiddenAbsent=false;break end end end
+    local clientTests=GetResourceMetadata(GetCurrentResourceName(),'shops_dev_tests',0)
+    local tests={
+        {'service ready',health.state=='ready'},
+        {'server development disabled',Config.DevMode==false},
+        {'client acceptance disabled',clientTests~='true'},
+        {'admin test trust absent',Config.Quotes.trustedCallers['feather-admin']~=true},
+        {'development commands absent',forbiddenAbsent},
+        {'operator purchase state available',registered.ShopPurchaseState==true},
+        {'operator reconciliation state available',registered.ShopReconciliationState==true}
+    }
+    local passed=0
+    for _,test in ipairs(tests) do
+        if test[2] then passed=passed+1 end
+        print(('[ShopReleaseContractSmokeTest] %-31s %s'):format(test[1],test[2] and 'PASS' or 'FAIL'))
+    end
+    print(('[ShopReleaseContractSmokeTest] done %d/%d passed (read-only)'):format(passed,#tests))
+end,true)

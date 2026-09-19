@@ -3,6 +3,15 @@
 Feather-native commerce service. Original BCC Shops is reference only; this
 resource has no VORP compatibility layer or legacy table dependency.
 
+Shipped defaults are production-safe: `Config.DevMode=false` and manifest metadata
+`shops_dev_tests 'false'`. Server/client acceptance commands are not registered in
+that profile. `ShopPurchaseState`, `ShopReconciliationState`, health/capability
+exports, and the read-only `ShopReleaseContractSmokeTest` remain available to the
+server console. To run development acceptance locally, deliberately enable both
+flags and restart (run `refresh` if manifest metadata changed); disable both and
+restart before packaging. DevMode also grants Admin quote/order test trust, so it
+must not be enabled merely for diagnostics.
+
 ## Foundation slice
 
 - Contract 1 result envelopes, health, capabilities, and bounded readiness.
@@ -437,5 +446,66 @@ Treasury management and withdrawals are not exposed to players in this slice.
 Live treasury purchase acceptance passed with amount=200, chargedOnce=true,
 stable delivery instances, and canonical business treasury credit=200. Undelivered
 treasury refund restored the buyer's 200 exactly once and blocked delivery.
-Final journal audit passed 5/5 with pending=0 and published=60. Treasury purchase
-and refund recovery across server restart remains the next acceptance gate.
+Final journal audit for that checkpoint passed 5/5 with pending=0 and published=60.
+Treasury purchase and refund recovery across full server restart subsequently
+passed, as did both flows while the buyer was offline and reconnected on a changed
+source (2026-09-18). Exact retries preserved charge/refund and delivery identities;
+offline refunded delivery remained blocked. Closing audit passed 5/5, pending=0,
+published=68. These results are manual development acceptance, not blanket release readiness.
+
+## Competing purchase development test
+
+`ShopPurchaseConcurrencyTest <nearby buyer source> <fresh requestId>` requires
+DevMode, an active business, and a wallet containing exactly the first offer's
+two-item price (200 dollars minor units for default apples). Stay near the shop,
+keep the session unchanged, and avoid unrelated purchases or funding during the
+test. Two ordinary prepared orders share one valid quote, with separate `:a`/`:b`
+request IDs, and run concurrently through the real purchase coordinator.
+
+The test expects one fulfillment and one insufficient-funds rejection, checks
+treasury credit/wallet conservation and stored destinations, then verifies both
+outcome replays and the winner's original Inventory instance receipt. The losing
+execution must have no payment UUID or fulfillment receipt. It adds no Inventory
+API and never writes Inventory or Economy tables. A pass purchases two real items
+and leaves the wallet empty; it does not restore funds or remove items.
+
+Fresh IDs are required; this is not a restart/replay harness. Failure prints order
+IDs for inspection, not instructions to invent replacement IDs. A timed-out call
+may still finish; restart before another concurrency test, and inspect/recover
+original orders first. Pausing the worker is recommended for isolated testing;
+always resume it afterward.
+
+Live concurrency acceptance passed with `shop-concurrency-002`: one fulfilled
+purchase, one insufficient-funds rejection, treasury delta=200, wallet=0, stable
+winner delivery replay, and no losing execution fulfillment. Worker resumed;
+closing journal audit passed 5/5 with pending=0 and published=71 (2026-09-18).
+The first run had one pre-intent internal error and one fulfilled purchase; winner
+replay verified no duplicates. Its underlying database cause was not established.
+Checkout now reads existing wallets/treasuries before provisioning only missing
+accounts, avoiding unnecessary provisioning locks. No Inventory API was added.
+
+After full server restart, `ShopPurchaseConcurrencyReplayTest 2
+shop-concurrency-002` passed using the original pair: the fulfilled winner replayed
+the same payment and Inventory instances, the loser remained rejected without
+payment or fulfillment, and wallet=0/treasury=1000 stayed unchanged. Closing
+journal audit again passed 5/5 with pending=0 and published=71. This replay command
+requires the original buyer and existing pair; it never funds or prepares orders.
+
+## Delivery versus refund concurrency
+
+`ShopDeliveryRefundConcurrencyTest <source> <paid-undelivered requestId>
+[delivery-first|refund-first]` races the existing purchase and compensation
+coordinators. Exactly one contender enters the per-order runtime mutex; retrying
+both sides then proves Inventory's durable grant/cancellation receipt fixes one
+terminal outcome. The command requires the original active buyer and never creates,
+funds, or retargets an order. Use the existing recovery test to prepare the paid
+undelivered order and pause the worker during the race.
+
+Both orderings passed live and across restart on 2026-09-18. Delivery-first
+fulfilled instances 105/106, refused refund, and retained wallet=0/treasury=1200.
+Refund-first restored wallet=200, returned treasury=1200, and permanently blocked
+delivery. Terminal replay changed no balances or items. The first delivery-first
+run exposed an overly strict test assertion because fulfilled orders reject
+compensation before creating a `delivery_committed` compensation row; the durable
+Inventory delivered receipt and fulfilled execution are the terminal evidence.
+The corrected replay passed. Closing audit passed 5/5, pending=0, published=76.

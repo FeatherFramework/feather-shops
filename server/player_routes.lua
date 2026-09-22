@@ -111,7 +111,7 @@ function ShopPlayerRoutes.Start()
                 table.sort(wallets, function(a, b) return a.currency < b.currency end)
                 return Ok(wallets)
             end },
-        { name = 'shops.catalog.v1', calls = 2,
+        { name = 'shops.catalog.v1', calls = 2, requireCharacter = false,
             validate = function(request) return type(request) == 'table' and next(request) == nil end,
             handler = function()
                 local listed = ShopService.ListShops()
@@ -128,7 +128,7 @@ function ShopPlayerRoutes.Start()
         { name = 'shops.purchase.v1', handler = Purchase, validate = PurchasePayload, calls = 2 }
     }) do
         local registered = exports['feather-core']:RegisterRpc(route.name, route.handler, {
-            contract = 1, direction = 'client_to_server', requireCharacter = true,
+            contract = 1, direction = 'client_to_server', requireCharacter = route.requireCharacter ~= false,
             windowMs = 1000, maxCalls = route.calls, maxPayloadBytes = 512,
             maxDepth = 2, maxNodes = 8,
             validatePayload = function(request)
@@ -147,10 +147,10 @@ ShopService.RegisterDevCommand('ShopPlayerRouteContractSmokeTest', function(sour
     local listed = exports['feather-core']:GetRpcRoutes()
     local routes = {}
     for _, route in ipairs(listed.ok and listed.value or {}) do routes[route.route] = route end
-    local function Registered(name)
+    local function Registered(name, requireCharacter)
         local route = routes[name]
         return route and route.owner == 'feather-shops' and route.contract == 1
-            and route.direction == 'client_to_server' and route.requireCharacter == true
+            and route.direction == 'client_to_server' and route.requireCharacter == requireCharacter
     end
     local uuid = Config.Shops[1].id
     local base = { quoteId = uuid, requestId = 'route-contract' }
@@ -160,8 +160,9 @@ ShopService.RegisterDevCommand('ShopPlayerRouteContractSmokeTest', function(sour
         sessionId = 'secret', source = 1, definitionId = 1 })
     local hidden = PublicError(Err('internal_error', 'Unavailable.', { accountId = 'secret' }))
     local tests = {
-        { 'quote route source-bound', Registered('shops.quote.v1') },
-        { 'purchase route source-bound', Registered('shops.purchase.v1') },
+        { 'catalog available pre-character', Registered('shops.catalog.v1', false) },
+        { 'quote route source-bound', Registered('shops.quote.v1', true) },
+        { 'purchase route source-bound', Registered('shops.purchase.v1', true) },
         { 'identity injection rejected', not PurchasePayload(tampered) },
         { 'price injection rejected', not QuotePayload(price) },
         { 'valid purchase payload', PurchasePayload(base) },

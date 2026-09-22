@@ -310,8 +310,9 @@ discard/refund mechanism is supplied. Server quote/purchase validation remains
 authoritative if the player moves away. The initial dollars/gold catalog uses
 two-decimal formatting. No shopkeeper entity, stock management, or selling UI yet.
 
-The read-only `shops.catalog.v1` RPC supplies locations/offers to the client without
-sharing server access configuration. Toolkit and Menu v2 are dependencies. After
+The read-only `shops.catalog.v1` RPC supplies locations/offers to authenticated clients
+before character activation without sharing server access configuration. Quote, wallet,
+and purchase routes continue to require an active character. Toolkit and Menu v2 are dependencies. After
 manifest changes run refresh, then restart feather-shops. UI acceptance starts with
 opening, browsing, cancelling review, and Escape before testing funded confirmation.
 

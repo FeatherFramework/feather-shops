@@ -345,12 +345,25 @@ RegisterCommand('ShopReleaseContractSmokeTest',function(source)
     local forbiddenAbsent=callable
     if callable then for name in pairs(forbidden) do if registered[name] then forbiddenAbsent=false;break end end end
     local clientTests=GetResourceMetadata(GetCurrentResourceName(),'shops_dev_tests',0)
+    local rpcRoutes=exports['feather-core']:GetRpcRoutes()
+    local shopRoutes={}
+    if type(rpcRoutes)=='table' and rpcRoutes.ok then
+        for _,route in ipairs(rpcRoutes.value or {}) do
+            if route.owner=='feather-shops' then shopRoutes[route.route]=route end
+        end
+    end
+    local catalogRoute=shopRoutes['shops.catalog.v1']
+    local quoteRoute=shopRoutes['shops.quote.v1']
+    local purchaseRoute=shopRoutes['shops.purchase.v1']
     local tests={
         {'service ready',health.state=='ready'},
         {'server development disabled',Config.DevMode==false},
         {'client acceptance disabled',clientTests~='true'},
         {'admin test trust absent',Config.Quotes.trustedCallers['feather-admin']~=true},
         {'development commands absent',forbiddenAbsent},
+        {'catalog available pre-character',catalogRoute and catalogRoute.requireCharacter==false},
+        {'commerce routes character-bound',quoteRoute and quoteRoute.requireCharacter==true
+            and purchaseRoute and purchaseRoute.requireCharacter==true},
         {'operator purchase state available',registered.ShopPurchaseState==true},
         {'operator reconciliation state available',registered.ShopReconciliationState==true}
     }

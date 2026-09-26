@@ -6,7 +6,7 @@ lua54 'yes'
 name 'feather-shops'
 description 'Authoritative commerce workflows for the Feather Framework'
 author 'Feather Framework'
-version '0.1.5'
+version '0.2.0'
 shops_dev_tests 'false'
 
 client_script 'client/quote_tests.lua'
@@ -14,7 +14,7 @@ client_script 'client/purchase_tests.lua'
 client_script 'client/shop.lua'
 
 server_scripts {
-    '@oxmysql/lib/MySQL.lua',
+    '@feather-mysql/lib/DB.lua',
     'config.lua',
     'server/main.lua',
     'server/organizations.lua',
@@ -29,7 +29,7 @@ server_scripts {
 }
 
 dependencies {
-    'oxmysql',
+    'feather-mysql',
     'feather-core',
     'feather-economy',
     'feather-organizations',

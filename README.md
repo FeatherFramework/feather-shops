@@ -31,7 +31,7 @@ unique items. Weapons and unique-item commerce remain deferred.
 
 ## Load order
 
-Start oxmysql, feather-core, feather-economy, feather-inventory, then feather-shops.
+Start feather-mysql, feather-core, feather-economy, feather-inventory, then feather-shops.
 
 ## Server exports
 

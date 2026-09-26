@@ -11,8 +11,8 @@ RegisterCommand('ShopFulfillmentLiveTest', function(source, args)
     if type(session) ~= 'table' or not session.ok then
         print('[ShopFulfillmentLiveTest] FAIL active session required'); return
     end
-    local order = MySQL.single.await([[SELECT * FROM `shop_orders`
-        WHERE `source_resource`='feather-shops' AND `request_id`=?]], { requestId })
+    local order = DB.one([[SELECT * FROM `shop_orders`
+        WHERE `source_resource`='feather-shops' AND `request_id`=?]], requestId)
     if not order or order.status ~= 'prepared'
         or order.buyer_character_id ~= session.value.characterId
         or order.buyer_account_id ~= session.value.accountId then

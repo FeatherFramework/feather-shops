@@ -24,7 +24,7 @@ RegisterCommand('ShopPurchaseConcurrencyTest',function(source,args)
         end
         assert(wallet and wallet.balance==total,'Wallet must equal exactly one two-item purchase; no funds changed')
         for _,suffix in ipairs({'a','b'}) do
-            assert(not MySQL.single.await("SELECT `order_id` FROM `shop_orders` WHERE `source_resource`='feather-shops' AND `request_id`=?",{base..':'..suffix}),
+            assert(not DB.one("SELECT `order_id` FROM `shop_orders` WHERE `source_resource`='feather-shops' AND `request_id`=?",base..':'..suffix),
                 'Fresh request ID required; inspect previous orders instead of rerunning')
         end
         local settlement=ShopOrganizations.Settlement(shop.id,offer.currency)
@@ -63,8 +63,8 @@ RegisterCommand('ShopPurchaseConcurrencyTest',function(source,args)
             elseif not result.ok and result.code=='insufficient_funds' then loser=index;insufficient=insufficient+1 end
         end
         assert(committed==1 and insufficient==1,'Expected one fulfilled purchase and one insufficient-funds rejection')
-        local won=MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?',{ids[winner]})
-        local lost=MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?',{ids[loser]})
+        local won=DB.one('SELECT * FROM `shop_order_executions` WHERE `order_id`=?',ids[winner])
+        local lost=DB.one('SELECT * FROM `shop_order_executions` WHERE `order_id`=?',ids[loser])
         assert(won and lost and won.state=='fulfilled' and lost.state=='rejected'
             and lost.payment_transaction_id==nil and lost.fulfillment_json==nil,'Unexpected durable executions')
         assert(won.to_account_id==settlement.value.accountId and lost.to_account_id==settlement.value.accountId,'Settlement destination changed')
@@ -102,10 +102,10 @@ RegisterCommand('ShopPurchaseConcurrencyReplayTest',function(source,args)
         assert(type(session)=='table' and session.ok,'Active buyer session required')
         local orders={}
         for index,suffix in ipairs({'a','b'}) do
-            orders[index]=MySQL.single.await([[SELECT o.*,e.`state` AS execution_state,e.`payment_transaction_id`,
+            orders[index]=DB.one([[SELECT o.*,e.`state` AS execution_state,e.`payment_transaction_id`,
                 e.`fulfillment_json`,e.`from_account_id`,e.`to_account_id`,e.`amount`
                 FROM `shop_orders` o INNER JOIN `shop_order_executions` e ON e.`order_id`=o.`order_id`
-                WHERE o.`source_resource`='feather-shops' AND o.`request_id`=?]],{base..':'..suffix})
+                WHERE o.`source_resource`='feather-shops' AND o.`request_id`=?]],base..':'..suffix)
             assert(orders[index] and orders[index].buyer_character_id==session.value.characterId
                 and orders[index].buyer_account_id==session.value.accountId,'Original buyer concurrency order required')
         end
@@ -136,7 +136,7 @@ RegisterCommand('ShopPurchaseConcurrencyReplayTest',function(source,args)
         local treasuryAfter=exports['feather-economy']:GetAccount({accountId=winner.to_account_id})
         assert(walletAfter.ok and treasuryAfter.ok and walletAfter.value.balance==walletBefore.value.balance
             and treasuryAfter.value.balance==treasuryBefore.value.balance,'Replay changed balances')
-        local loserAfter=MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?',{loser.order_id})
+        local loserAfter=DB.one('SELECT * FROM `shop_order_executions` WHERE `order_id`=?',loser.order_id)
         assert(loserAfter and loserAfter.state=='rejected' and loserAfter.payment_transaction_id==nil
             and loserAfter.fulfillment_json==nil,'Rejected loser acquired effects')
         print(('[ShopPurchaseConcurrencyReplayTest] PASS winner=%s loser=%s winnerReplayed=true sameInstances=true loserStillRejected=true balancesUnchanged=true wallet=%s treasury=%s'):format(
@@ -155,8 +155,8 @@ RegisterCommand('ShopPurchaseRecoveryTest', function(source, args)
     end
     local session = exports['feather-core']:GetSessionContext(target)
     if type(session) ~= 'table' or not session.ok then print('[ShopPurchaseRecoveryTest] FAIL buyer session required'); return end
-    local order = MySQL.single.await([[SELECT * FROM `shop_orders`
-        WHERE `source_resource`='feather-shops' AND `request_id`=?]], { requestId })
+    local order = DB.one([[SELECT * FROM `shop_orders`
+        WHERE `source_resource`='feather-shops' AND `request_id`=?]], requestId)
     if operation ~= 'retry' and order then print('[ShopPurchaseRecoveryTest] FAIL fresh request ID required'); return end
     if operation == 'retry' and not order then print('[ShopPurchaseRecoveryTest] FAIL prepared recovery order missing'); return end
     if order and (order.buyer_character_id ~= session.value.characterId or order.buyer_account_id ~= session.value.accountId) then
@@ -177,9 +177,9 @@ RegisterCommand('ShopPurchaseRecoveryTest', function(source, args)
         if not quoted.ok then print('[ShopPurchaseRecoveryTest] FAIL quote=' .. quoted.code); return end
         local prepared = ShopOrders.Prepare({ requestId = requestId, quoteId = quoted.value.id }, target, 'feather-shops')
         if not prepared.ok then print('[ShopPurchaseRecoveryTest] FAIL order=' .. prepared.code); return end
-        order = MySQL.single.await('SELECT * FROM `shop_orders` WHERE `order_id`=?', { prepared.value.id })
+        order = DB.one('SELECT * FROM `shop_orders` WHERE `order_id`=?', prepared.value.id)
     end
-    local beforeExecution = MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', { order.order_id })
+    local beforeExecution = DB.one('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', order.order_id)
     if operation == 'retry' and (not beforeExecution or
         (beforeExecution.state ~= 'payment_pending' and beforeExecution.state ~= 'paid' and beforeExecution.state ~= 'fulfilled')) then
         print('[ShopPurchaseRecoveryTest] FAIL execution is not recoverable'); return
@@ -189,7 +189,7 @@ RegisterCommand('ShopPurchaseRecoveryTest', function(source, args)
     local result = ShopPurchases.Purchase(order.order_id, target, checkpoint)
     local after = exports['feather-economy']:GetAccount({ accountId = wallet.accountId })
     local sinkAfter = exports['feather-economy']:GetAccount({ accountId = sink.value.accountId })
-    local stored = MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', { order.order_id })
+    local stored = DB.one('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', order.order_id)
     if operation ~= 'retry' then
         local expected = operation == 'payment' and 'payment_pending' or 'paid'
         local passed = not result.ok and result.code == 'test_interrupted' and stored and stored.state == expected
@@ -237,12 +237,12 @@ RegisterCommand('ShopPurchaseLiveTest', function(source, args)
     end
     local session = exports['feather-core']:GetSessionContext(target)
     if type(session) ~= 'table' or not session.ok then print('[ShopPurchaseLiveTest] FAIL active buyer required'); return end
-    local order = MySQL.single.await([[SELECT * FROM `shop_orders`
-        WHERE `source_resource`='feather-shops' AND `request_id`=?]], { requestId })
+    local order = DB.one([[SELECT * FROM `shop_orders`
+        WHERE `source_resource`='feather-shops' AND `request_id`=?]], requestId)
     if order and (order.buyer_character_id ~= session.value.characterId or order.buyer_account_id ~= session.value.accountId) then
         print('[ShopPurchaseLiveTest] FAIL request belongs to another buyer'); return
     end
-    local execution = order and MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', { order.order_id })
+    local execution = order and DB.one('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', order.order_id)
     if order and (not execution or execution.state ~= 'fulfilled') then
         print('[ShopPurchaseLiveTest] FAIL existing incomplete order requires recovery; do not use a new request ID'); return
     end
@@ -268,7 +268,7 @@ RegisterCommand('ShopPurchaseLiveTest', function(source, args)
         if not quoted.ok then print('[ShopPurchaseLiveTest] FAIL quote=' .. quoted.code); return end
         local prepared = ShopOrders.Prepare({ requestId = requestId, quoteId = quoted.value.id }, target, 'feather-shops')
         if not prepared.ok then print('[ShopPurchaseLiveTest] FAIL prepare=' .. prepared.code); return end
-        order = MySQL.single.await('SELECT * FROM `shop_orders` WHERE `order_id`=?', { prepared.value.id })
+        order = DB.one('SELECT * FROM `shop_orders` WHERE `order_id`=?', prepared.value.id)
     end
     local result = ShopPurchases.Purchase(order.order_id, target)
     if not result.ok then
@@ -285,7 +285,7 @@ RegisterCommand('ShopPurchaseLiveTest', function(source, args)
     local delivered = exports['feather-inventory']:GrantCharacterItemOnce({
         grantId = 'shop-fulfillment:' .. order.order_id, characterId = order.buyer_character_id,
         definitionId = tonumber(order.definition_id), itemName = order.item_name, quantity = tonumber(order.quantity) })
-    local stored = MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', { order.order_id })
+    local stored = DB.one('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', order.order_id)
     chargedOnce = chargedOnce and stored and stored.to_account_id == sink.value.accountId
     local sameDelivery = false
     if stored and stored.fulfillment_json and delivered.ok then

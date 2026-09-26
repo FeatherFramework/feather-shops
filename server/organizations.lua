@@ -11,7 +11,7 @@ function ShopOrganizations.GetId(shopId) return links[shopId] end
 function ShopOrganizations.Settlement(shopId,currency,orderId)
     -- Stored intent fixes the destination permanently, including old sink orders.
     if orderId then
-        local execution=MySQL.single.await('SELECT `to_account_id` FROM `shop_order_executions` WHERE `order_id`=?',{orderId})
+        local execution=DB.one('SELECT `to_account_id` FROM `shop_order_executions` WHERE `order_id`=?',orderId)
         if execution then return exports['feather-economy']:GetAccount({accountId=execution.to_account_id}) end
     end
     local id=links[shopId]
@@ -54,11 +54,11 @@ function ShopOrganizations.Start()
     local hash=2166136261
     for index=1,#schema do hash=((hash~schema:byte(index))*16777619)&0xffffffff end
     local checksum=('fnv1a32:%08x'):format(hash)
-    local stored=MySQL.scalar.await('SELECT checksum FROM shop_schema_migrations WHERE id=?',{'005_shop_organization_links'})
+    local stored=DB.value('SELECT checksum FROM shop_schema_migrations WHERE id=?','005_shop_organization_links')
     if stored and stored~=checksum then return Err('migration_checksum_mismatch','Shop organization link migration changed.') end
     if not stored then
-        MySQL.query.await(schema)
-        MySQL.insert.await('INSERT INTO shop_schema_migrations (id,checksum) VALUES (?,?)',{'005_shop_organization_links',checksum})
+        DB.exec(schema)
+        DB.insert('INSERT INTO shop_schema_migrations (id,checksum) VALUES (?,?)','005_shop_organization_links',checksum)
     end
     local resolved={}
     for _,shop in ipairs(Config.Shops) do
@@ -79,10 +79,10 @@ function ShopOrganizations.Start()
         resolved[shop.id]=id
     end
     local failure
-    local committed=MySQL.startTransaction(function(query)
+    local committed=DB.transaction(function(tx)
         for _,shop in ipairs(Config.Shops) do
-            query('INSERT IGNORE INTO shop_organization_links (shop_id,organization_id) VALUES (?,?)',{shop.id,resolved[shop.id]})
-            local rows=query('SELECT organization_id FROM shop_organization_links WHERE shop_id=? FOR UPDATE',{shop.id}) or {}
+            tx.exec('INSERT IGNORE INTO shop_organization_links (shop_id,organization_id) VALUES (?,?)',shop.id,resolved[shop.id])
+            local rows=tx.query('SELECT organization_id FROM shop_organization_links WHERE shop_id=? FOR UPDATE',shop.id) or {}
             if not rows[1] or rows[1].organization_id~=resolved[shop.id] then
                 failure=Err('organization_link_conflict','Existing shop organization link cannot be rebound.',{shopId=shop.id});return false
             end
@@ -101,7 +101,7 @@ ShopService.RegisterDevCommand('ShopOrganizationContractSmokeTest',function(sour
         local function Check(label,good) tests[#tests+1]={label,good==true} end
         local ready=exports['feather-organizations']:AwaitReady(0)
         Check('organizations ready',ready.ok)
-        local count=tonumber(MySQL.scalar.await('SELECT COUNT(*) FROM shop_organization_links l JOIN shop_locations s ON s.shop_id=l.shop_id WHERE s.enabled=1'))
+        local count=tonumber(DB.value('SELECT COUNT(*) FROM shop_organization_links l JOIN shop_locations s ON s.shop_id=l.shop_id WHERE s.enabled=1'))
         Check('links persisted',count==#Config.Shops)
         for _,shop in ipairs(Config.Shops) do
             local id=links[shop.id]
@@ -112,7 +112,7 @@ ShopService.RegisterDevCommand('ShopOrganizationContractSmokeTest',function(sour
             Check('catalog UUID linked',catalog.ok and catalog.value.organizationId==id)
             catalog.value.organizationId='tampered'
             Check('snapshot isolated',ShopService.GetCatalog(shop.id).value.organizationId==id)
-            local persisted=MySQL.scalar.await('SELECT organization_id FROM shop_organization_links WHERE shop_id=?',{shop.id})
+            local persisted=DB.value('SELECT organization_id FROM shop_organization_links WHERE shop_id=?',shop.id)
             Check('persisted UUID matches',persisted==id)
             local history=exports['feather-organizations']:InspectOrganizationHistory({organizationId=id,limit=50})
             local bootstrap=0

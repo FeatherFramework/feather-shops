@@ -95,7 +95,7 @@ local function CreateQuote(request, source)
     if type(currency) ~= 'table' or not currency.ok or not currency.value.enabled then
         return Err('currency_unavailable', 'Offer currency is unavailable.')
     end
-    local quote = { id = MySQL.scalar.await('SELECT UUID()'), source = source,
+    local quote = { id = DB.value('SELECT UUID()'), source = source,
         sessionId = session.value.sessionId, characterId = session.value.characterId,
         accountId = session.value.accountId, shopId = request.shopId, offerId = request.offerId,
         itemName = terms.value.offer.itemName, definitionId = definition.value.id,

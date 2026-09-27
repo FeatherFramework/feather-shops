@@ -58,8 +58,8 @@ local function PurchaseInner(request, source)
     if not result.ok then
         local failure = PublicError(result)
         -- A code/timeout/missing row alone cannot authorize dropping a retry.
-        local execution = MySQL.single.await('SELECT `state`,`payment_transaction_id`,`fulfillment_json` FROM `shop_order_executions` WHERE `order_id`=?',
-            { prepared.value.id })
+        local execution = DB.one('SELECT `state`,`payment_transaction_id`,`fulfillment_json` FROM `shop_order_executions` WHERE `order_id`=?',
+            prepared.value.id)
         if UnpaidRejection(execution) then
             failure.message = 'Purchase rejected. No payment was taken.'
             failure.details = { purchaseState = 'rejected', safeToClear = true }

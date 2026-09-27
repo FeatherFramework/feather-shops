@@ -8,17 +8,17 @@ RegisterCommand('ShopRefundDeliveredTest', function(source, args)
         print('[ShopRefundDeliveredTest] usage: ShopRefundDeliveredTest <source> <after-grant requestId>'); return
     end
     local session = exports['feather-core']:GetSessionContext(target)
-    local order = MySQL.single.await([[SELECT o.*,e.`state` AS execution_state,e.`from_account_id`,e.`to_account_id`
+    local order = DB.one([[SELECT o.*,e.`state` AS execution_state,e.`from_account_id`,e.`to_account_id`
         FROM `shop_orders` o INNER JOIN `shop_order_executions` e ON e.`order_id`=o.`order_id`
-        WHERE o.`source_resource`='feather-shops' AND o.`request_id`=?]], { requestId })
+        WHERE o.`source_resource`='feather-shops' AND o.`request_id`=?]], requestId)
     if not session.ok or not order or order.buyer_character_id ~= session.value.characterId
         or order.buyer_account_id ~= session.value.accountId or order.execution_state ~= 'paid' then
         print('[ShopRefundDeliveredTest] FAIL original buyer and paid after-grant order required'); return
     end
     -- Dev-only preflight: refuse to run against a grant that has not committed.
     -- Production compensation never treats a missing receipt as no-delivery proof.
-    local encoded = MySQL.scalar.await([[SELECT `result_json` FROM `inventory_grant_receipts`
-        WHERE `source_resource`='feather-shops' AND `grant_id`=?]], { 'shop-fulfillment:' .. order.order_id })
+    local encoded = DB.value([[SELECT `result_json` FROM `inventory_grant_receipts`
+        WHERE `source_resource`='feather-shops' AND `grant_id`=?]], 'shop-fulfillment:' .. order.order_id)
     local decoded, original = pcall(json.decode, encoded or '')
     if not decoded or type(original) ~= 'table' or original.cancelled == true
         or type(original.instanceIds) ~= 'table' or #original.instanceIds ~= tonumber(order.quantity) then
@@ -29,12 +29,12 @@ RegisterCommand('ShopRefundDeliveredTest', function(source, args)
     if not before.ok or not sink.ok then print('[ShopRefundDeliveredTest] FAIL balances unavailable'); return end
     local refused = ShopPurchases.Compensate(order.order_id, target)
     local repeated = ShopPurchases.Compensate(order.order_id, target)
-    local row = MySQL.single.await('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?', { order.order_id })
+    local row = DB.one('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?', order.order_id)
     if refused.ok or refused.code ~= 'grant_already_delivered' or not row or row.state ~= 'delivery_committed' then
         print('[ShopRefundDeliveredTest] FAIL delivery protection; retain request ID'); return
     end
     local recovered = ShopPurchases.Purchase(order.order_id, target)
-    local stored = MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', { order.order_id })
+    local stored = DB.one('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', order.order_id)
     local parsed, fulfillment = pcall(json.decode, stored and stored.fulfillment_json or '')
     local sameIds = parsed and type(fulfillment) == 'table' and fulfillment.replayed == true
         and json.encode(fulfillment.instanceIds) == json.encode(original.instanceIds)
@@ -61,10 +61,10 @@ RegisterCommand('ShopDeliveryRefundConcurrencyTest',function(source,args)
         assert(ShopService.IsReady(),'Shops not ready')
         local session=exports['feather-core']:GetSessionContext(target)
         assert(type(session)=='table' and session.ok,'Active buyer required')
-        local order=MySQL.single.await([[SELECT o.*,e.`state` AS execution_state,e.`from_account_id`,
+        local order=DB.one([[SELECT o.*,e.`state` AS execution_state,e.`from_account_id`,
             e.`to_account_id`,e.`payment_transaction_id`,e.`amount`,e.`fulfillment_json`
             FROM `shop_orders` o INNER JOIN `shop_order_executions` e ON e.`order_id`=o.`order_id`
-            WHERE o.`source_resource`='feather-shops' AND o.`request_id`=?]],{requestId})
+            WHERE o.`source_resource`='feather-shops' AND o.`request_id`=?]],requestId)
         assert(order and order.buyer_character_id==session.value.characterId
             and order.buyer_account_id==session.value.accountId,'Original buyer order required')
         if order.execution_state=='fulfilled' then
@@ -90,7 +90,7 @@ RegisterCommand('ShopDeliveryRefundConcurrencyTest',function(source,args)
                 tostring(after.value.balance),tostring(treasuryAfter.value.balance)))
             return
         end
-        local existingCompensation=MySQL.single.await('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?',{order.order_id})
+        local existingCompensation=DB.one('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?',order.order_id)
         if order.execution_state=='paid' and existingCompensation and existingCompensation.state=='refunded' then
             local request={grantId='shop-fulfillment:'..order.order_id,characterId=order.buyer_character_id,
                 itemName=order.item_name,definitionId=tonumber(order.definition_id),quantity=tonumber(order.quantity)}
@@ -153,8 +153,8 @@ RegisterCommand('ShopDeliveryRefundConcurrencyTest',function(source,args)
         -- terminal winner; neither retry is permitted to reverse that decision.
         local delivery=ShopPurchases.Purchase(order.order_id,target)
         local refund=ShopPurchases.Compensate(order.order_id,target)
-        local execution=MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?',{order.order_id})
-        local compensation=MySQL.single.await('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?',{order.order_id})
+        local execution=DB.one('SELECT * FROM `shop_order_executions` WHERE `order_id`=?',order.order_id)
+        local compensation=DB.one('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?',order.order_id)
         local request={grantId='shop-fulfillment:'..order.order_id,characterId=order.buyer_character_id,
             itemName=order.item_name,definitionId=tonumber(order.definition_id),quantity=tonumber(order.quantity)}
         local grant=exports['feather-inventory']:GrantCharacterItemOnce(request)
@@ -190,11 +190,11 @@ RegisterCommand('ShopRefundLiveTest', function(source, args)
         or (mode ~= 'refund' and mode ~= 'interrupt' and mode ~= 'retry') then
         print('[ShopRefundLiveTest] usage: ShopRefundLiveTest <source> <paid undelivered requestId> refund|interrupt|retry'); return
     end
-    local order = MySQL.single.await([[SELECT o.*,e.`from_account_id`,e.`to_account_id`
+    local order = DB.one([[SELECT o.*,e.`from_account_id`,e.`to_account_id`
         FROM `shop_orders` o INNER JOIN `shop_order_executions` e ON e.`order_id`=o.`order_id`
-        WHERE o.`source_resource`='feather-shops' AND o.`request_id`=? AND e.`state`='paid']], { requestId })
+        WHERE o.`source_resource`='feather-shops' AND o.`request_id`=? AND e.`state`='paid']], requestId)
     if not order then print('[ShopRefundLiveTest] FAIL paid order required'); return end
-    local prior = MySQL.single.await('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?', { order.order_id })
+    local prior = DB.one('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?', order.order_id)
     if (mode == 'retry' and (not prior or prior.state ~= 'refund_pending' and prior.state ~= 'refunded'))
         or (mode == 'interrupt' and prior) then
         print('[ShopRefundLiveTest] FAIL mode does not match existing compensation; retain request ID'); return
@@ -203,7 +203,7 @@ RegisterCommand('ShopRefundLiveTest', function(source, args)
     local sink = exports['feather-economy']:GetAccount({ accountId = order.to_account_id })
     if not before.ok or not sink.ok then print('[ShopRefundLiveTest] FAIL balances unavailable'); return end
     local result = ShopPurchases.Compensate(order.order_id, target, mode == 'interrupt' and 'after_refund' or nil)
-    local row = MySQL.single.await('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?', { order.order_id })
+    local row = DB.one('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?', order.order_id)
     if not row then print('[ShopRefundLiveTest] FAIL code=' .. tostring(result.code)); return end
     if mode == 'interrupt' then
         local after = exports['feather-economy']:GetAccount({ accountId = order.from_account_id })
@@ -242,9 +242,9 @@ RegisterCommand('ShopCompensationFenceTest', function(source, args)
     end
     local session = exports['feather-core']:GetSessionContext(target)
     if not session.ok then print('[ShopCompensationFenceTest] FAIL active buyer required'); return end
-    local order = MySQL.single.await([[SELECT o.* FROM `shop_orders` o
+    local order = DB.one([[SELECT o.* FROM `shop_orders` o
         INNER JOIN `shop_order_executions` e ON e.`order_id`=o.`order_id`
-        WHERE o.`source_resource`='feather-shops' AND o.`request_id`=? AND e.`state`='fulfilled']], { requestId })
+        WHERE o.`source_resource`='feather-shops' AND o.`request_id`=? AND e.`state`='fulfilled']], requestId)
     if not order or order.buyer_character_id ~= session.value.characterId
         or order.buyer_account_id ~= session.value.accountId then
         print('[ShopCompensationFenceTest] FAIL fulfilled purchase belonging to buyer required'); return

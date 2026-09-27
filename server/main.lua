@@ -105,7 +105,7 @@ local statements = {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci]]
 }
 local function Migrate()
-    MySQL.query.await([[CREATE TABLE IF NOT EXISTS `shop_schema_migrations` (
+    DB.exec([[CREATE TABLE IF NOT EXISTS `shop_schema_migrations` (
         `id` VARCHAR(100) NOT NULL, `checksum` VARCHAR(64) NOT NULL,
         `applied_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (`id`)
@@ -114,44 +114,44 @@ local function Migrate()
     local text = table.concat(statements, '\n')
     for index = 1, #text do hash = ((hash ~ text:byte(index)) * 16777619) & 0xffffffff end
     local checksum = ('fnv1a32:%08x'):format(hash)
-    local stored = MySQL.scalar.await(
-        'SELECT `checksum` FROM `shop_schema_migrations` WHERE `id`=?', { '001_shop_catalog' })
+    local stored = DB.value(
+        'SELECT `checksum` FROM `shop_schema_migrations` WHERE `id`=?', '001_shop_catalog')
     if stored and stored ~= checksum then
         return Err('migration_checksum_mismatch', 'Applied shop catalog migration has changed.')
     end
     if not stored then
-        for _, statement in ipairs(statements) do MySQL.query.await(statement) end
-        MySQL.insert.await('INSERT INTO `shop_schema_migrations` (`id`,`checksum`) VALUES (?,?)',
-            { '001_shop_catalog', checksum })
+        for _, statement in ipairs(statements) do DB.exec(statement) end
+        DB.insert('INSERT INTO `shop_schema_migrations` (`id`,`checksum`) VALUES (?,?)',
+            '001_shop_catalog', checksum)
     end
     return Ok({ applied = stored and 0 or 1 })
 end
 
 local function Synchronize()
-    local committed = MySQL.startTransaction(function(query)
-        query('UPDATE `shop_offers` SET `enabled`=0')
-        query('UPDATE `shop_locations` SET `enabled`=0')
-        for _, shop in ipairs(Config.Shops) do
-            query([[INSERT INTO `shop_locations`
+    local batch = {
+        DB.stmt('UPDATE `shop_offers` SET `enabled`=0'),
+        DB.stmt('UPDATE `shop_locations` SET `enabled`=0')
+    }
+    for _, shop in ipairs(Config.Shops) do
+        batch[#batch + 1] = DB.stmt([[INSERT INTO `shop_locations`
                 (`shop_id`,`label`,`pos_x`,`pos_y`,`pos_z`,`heading`,`enabled`)
                 VALUES (?,?,?,?,?,?,1) ON DUPLICATE KEY UPDATE
                 `label`=VALUES(`label`),`pos_x`=VALUES(`pos_x`),`pos_y`=VALUES(`pos_y`),
                 `pos_z`=VALUES(`pos_z`),`heading`=VALUES(`heading`),`enabled`=1]],
-                { shop.id, shop.label, shop.position.x, shop.position.y, shop.position.z, shop.heading })
-            for _, offer in ipairs(shop.offers) do
-                query([[INSERT INTO `shop_offers`
+            shop.id, shop.label, shop.position.x, shop.position.y, shop.position.z, shop.heading)
+        for _, offer in ipairs(shop.offers) do
+            batch[#batch + 1] = DB.stmt([[INSERT INTO `shop_offers`
                     (`offer_id`,`shop_id`,`item_name`,`label`,`currency_code`,`unit_price`,`maximum_quantity`,`enabled`)
                     VALUES (?,?,?,?,?,?,?,1) ON DUPLICATE KEY UPDATE
                     `shop_id`=VALUES(`shop_id`),`item_name`=VALUES(`item_name`),`label`=VALUES(`label`),
                     `currency_code`=VALUES(`currency_code`),`unit_price`=VALUES(`unit_price`),
                     `maximum_quantity`=VALUES(`maximum_quantity`),`enabled`=1]],
-                    { offer.id, shop.id, offer.itemName, offer.label, offer.currency,
-                        offer.unitPrice, offer.maximumQuantity })
-            end
+                offer.id, shop.id, offer.itemName, offer.label, offer.currency,
+                    offer.unitPrice, offer.maximumQuantity)
         end
-        return true
-    end)
-    if committed ~= true then return Err('catalog_failed', 'Shop catalog synchronization failed.') end
+    end
+    local called = pcall(DB.batchTransaction, batch)
+    if not called then return Err('catalog_failed', 'Shop catalog synchronization failed.') end
     for _, shop in ipairs(Config.Shops) do catalog[shop.id] = Copy(shop) end
     return Ok(true)
 end
@@ -206,6 +206,11 @@ CreateThread(function()
         local configured = Validate()
         if not configured.ok then return configured end
         health.checks.configuration = true
+        health.phase = 'waiting_for_database'
+        if not DB.awaitReady(Config.ReadinessTimeoutMs) then
+            return Err('dependency_unavailable', 'feather-mysql did not become ready.')
+        end
+        health.checks['feather-mysql'] = true
         for _, dependency in ipairs({ 'feather-core', 'feather-economy', 'feather-organizations' }) do
             health.phase = 'waiting_for_' .. dependency
             local ready = exports[dependency]:AwaitReady(Config.ReadinessTimeoutMs)
@@ -287,13 +292,13 @@ ShopService.RegisterDevCommand('ShopFoundationSmokeTest', function(source)
         return
     end
     local listed = ListShops()
-    local persistedShops = tonumber(MySQL.scalar.await('SELECT COUNT(*) FROM `shop_locations` WHERE `enabled`=1'))
-    local persistedOffers = tonumber(MySQL.scalar.await('SELECT COUNT(*) FROM `shop_offers` WHERE `enabled`=1'))
+    local persistedShops = tonumber(DB.value('SELECT COUNT(*) FROM `shop_locations` WHERE `enabled`=1'))
+    local persistedOffers = tonumber(DB.value('SELECT COUNT(*) FROM `shop_offers` WHERE `enabled`=1'))
     local expectedOffers, pricesValid = 0, true
     for _, shop in ipairs(Config.Shops) do
         for _, offer in ipairs(shop.offers) do
             expectedOffers = expectedOffers + 1
-            local price = tonumber(MySQL.scalar.await('SELECT `unit_price` FROM `shop_offers` WHERE `offer_id`=?', { offer.id }))
+            local price = tonumber(DB.value('SELECT `unit_price` FROM `shop_offers` WHERE `offer_id`=?', offer.id))
             pricesValid = pricesValid and price == offer.unitPrice
         end
     end

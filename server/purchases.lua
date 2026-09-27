@@ -19,13 +19,13 @@ function ShopPurchases.Start()
     local hash = 2166136261
     for index = 1, #schema do hash = ((hash ~ schema:byte(index)) * 16777619) & 0xffffffff end
     local checksum = ('fnv1a32:%08x'):format(hash)
-    local stored = MySQL.scalar.await('SELECT `checksum` FROM `shop_schema_migrations` WHERE `id`=?',
-        { '003_shop_order_executions' })
+    local stored = DB.value('SELECT `checksum` FROM `shop_schema_migrations` WHERE `id`=?',
+        '003_shop_order_executions')
     if stored and stored ~= checksum then return Err('migration_checksum_mismatch', 'Applied execution migration changed.') end
     if not stored then
-        MySQL.query.await(schema)
-        MySQL.insert.await('INSERT INTO `shop_schema_migrations` (`id`,`checksum`) VALUES (?,?)',
-            { '003_shop_order_executions', checksum })
+        DB.exec(schema)
+        DB.insert('INSERT INTO `shop_schema_migrations` (`id`,`checksum`) VALUES (?,?)',
+            '003_shop_order_executions', checksum)
     end
     local compensation = [[CREATE TABLE IF NOT EXISTS `shop_order_compensations` (
         `order_id` CHAR(36) NOT NULL PRIMARY KEY,
@@ -39,20 +39,20 @@ function ShopPurchases.Start()
     local compensationHash = 2166136261
     for index = 1, #compensation do compensationHash = ((compensationHash ~ compensation:byte(index)) * 16777619) & 0xffffffff end
     local compensationChecksum = ('fnv1a32:%08x'):format(compensationHash)
-    local compensationStored = MySQL.scalar.await('SELECT `checksum` FROM `shop_schema_migrations` WHERE `id`=?',
-        { '004_shop_order_compensations' })
+    local compensationStored = DB.value('SELECT `checksum` FROM `shop_schema_migrations` WHERE `id`=?',
+        '004_shop_order_compensations')
     if compensationStored and compensationStored ~= compensationChecksum then
         return Err('migration_checksum_mismatch', 'Applied compensation migration changed.')
     end
     if not compensationStored then
-        MySQL.query.await(compensation)
-        MySQL.insert.await('INSERT INTO `shop_schema_migrations` (`id`,`checksum`) VALUES (?,?)',
-            { '004_shop_order_compensations', compensationChecksum })
+        DB.exec(compensation)
+        DB.insert('INSERT INTO `shop_schema_migrations` (`id`,`checksum`) VALUES (?,?)',
+            '004_shop_order_compensations', compensationChecksum)
     end
     return Ok({ applied = (stored and 0 or 1) + (compensationStored and 0 or 1) })
 end
 local function Execution(orderId)
-    return MySQL.single.await('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', { orderId })
+    return DB.one('SELECT * FROM `shop_order_executions` WHERE `order_id`=?', orderId)
 end
 local function Wallet(characterId, currency)
     local found = exports['feather-economy']:FindAccountsByOwner({ ownerType = 'character', ownerId = characterId })
@@ -91,7 +91,7 @@ local function Coordinate(order, source, checkpoint, recovery)
     if execution and execution.state == 'rejected' then
         return Err(execution.last_error or 'purchase_rejected', 'This order was rejected.', { orderId = order.order_id })
     end
-    local compensation = MySQL.single.await('SELECT `state` FROM `shop_order_compensations` WHERE `order_id`=?', { order.order_id })
+    local compensation = DB.one('SELECT `state` FROM `shop_order_compensations` WHERE `order_id`=?', order.order_id)
     if compensation and compensation.state ~= 'delivery_committed' then
         return Err('order_compensating', 'Delivery is blocked by durable compensation intent.', { orderId = order.order_id })
     end
@@ -111,9 +111,9 @@ local function Coordinate(order, source, checkpoint, recovery)
         if not Current() then return Err('session_expired', 'Buyer session changed.') end
         validated = ShopQuotes.Validate(order.quote_id, source)
         if not validated.ok then return validated end
-        MySQL.insert.await([[INSERT IGNORE INTO `shop_order_executions`
+        DB.insert([[INSERT IGNORE INTO `shop_order_executions`
             (`order_id`,`from_account_id`,`to_account_id`,`currency_code`,`amount`) VALUES (?,?,?,?,?)]],
-            { order.order_id, wallet.value.accountId, sink.value.accountId, order.currency_code, tonumber(order.total_amount) })
+            order.order_id, wallet.value.accountId, sink.value.accountId, order.currency_code, tonumber(order.total_amount))
         execution = Execution(order.order_id)
         if not execution then return Err('internal_error', 'Payment intent could not be stored.') end
     end
@@ -130,17 +130,17 @@ local function Coordinate(order, source, checkpoint, recovery)
             local code = type(paid) == 'table' and paid.code or 'dependency_unavailable'
             -- Only definitive insufficient funds is terminal. Uncertain errors
             -- leave the durable intent for retry with the original payment key.
-            MySQL.update.await([[UPDATE `shop_order_executions` SET `last_error`=?,`state`=?
+            DB.exec([[UPDATE `shop_order_executions` SET `last_error`=?,`state`=?
                 WHERE `order_id`=? AND `state`='payment_pending']],
-                { code, code == 'insufficient_funds' and 'rejected' or 'payment_pending', order.order_id })
+                code, code == 'insufficient_funds' and 'rejected' or 'payment_pending', order.order_id)
             return Err(code, 'Payment did not complete.', { orderId = order.order_id })
         end
         if Config.DevMode and checkpoint == 'after_payment' then
             return Err('test_interrupted', 'Payment committed; restart and retry the same order.', { orderId = order.order_id })
         end
-        MySQL.update.await([[UPDATE `shop_order_executions` SET `state`='paid',
+        DB.exec([[UPDATE `shop_order_executions` SET `state`='paid',
             `payment_transaction_id`=?,`last_error`=NULL WHERE `order_id`=? AND `state`='payment_pending']],
-            { paid.value.transactionId, order.order_id })
+            paid.value.transactionId, order.order_id)
         execution = Execution(order.order_id)
     end
     if execution.state == 'paid' then
@@ -154,17 +154,17 @@ local function Coordinate(order, source, checkpoint, recovery)
             itemName = order.item_name, definitionId = tonumber(order.definition_id), quantity = tonumber(order.quantity) })
         if type(granted) ~= 'table' or not granted.ok then
             local code = type(granted) == 'table' and granted.error and granted.error.code or 'dependency_unavailable'
-            MySQL.update.await("UPDATE `shop_order_executions` SET `last_error`=? WHERE `order_id`=? AND `state`='paid'",
-                { code, order.order_id })
+            DB.exec("UPDATE `shop_order_executions` SET `last_error`=? WHERE `order_id`=? AND `state`='paid'",
+                code, order.order_id)
             return Err('fulfillment_pending', 'Payment committed; fulfillment needs retry or compensation.',
                 { orderId = order.order_id, cause = code })
         end
         if Config.DevMode and checkpoint == 'after_grant' then
             return Err('test_interrupted', 'Grant committed; restart and retry the same order.', { orderId = order.order_id })
         end
-        MySQL.update.await([[UPDATE `shop_order_executions` SET `state`='fulfilled',
+        DB.exec([[UPDATE `shop_order_executions` SET `state`='fulfilled',
             `fulfillment_json`=?,`last_error`=NULL WHERE `order_id`=? AND `state`='paid']],
-            { json.encode(granted.value), order.order_id })
+            json.encode(granted.value), order.order_id)
         execution = Execution(order.order_id)
     end
     if execution.state ~= 'fulfilled' then return Err('purchase_pending', 'Order is incomplete.', { orderId = order.order_id }) end
@@ -178,7 +178,7 @@ local function Purchase(orderId, source, checkpoint, recovery)
     if active[orderId] then return Err('transaction_conflict', 'This order is already running.') end
     active[orderId] = true
     local called, result = xpcall(function()
-        local order = MySQL.single.await("SELECT * FROM `shop_orders` WHERE `order_id`=? AND `source_resource`='feather-shops'", { orderId })
+        local order = DB.one("SELECT * FROM `shop_orders` WHERE `order_id`=? AND `source_resource`='feather-shops'", orderId)
         if not order then return Err('order_not_found', 'Order not found.') end
         return Coordinate(order, source, checkpoint, recovery)
     end, debug.traceback)
@@ -203,7 +203,7 @@ local function Compensate(orderId, source, checkpoint, recovery)
     if active[orderId] then return Err('transaction_conflict', 'This order is already running.') end
     active[orderId] = true
     local called, result = xpcall(function()
-        local order = MySQL.single.await("SELECT * FROM `shop_orders` WHERE `order_id`=? AND `source_resource`='feather-shops'", { orderId })
+        local order = DB.one("SELECT * FROM `shop_orders` WHERE `order_id`=? AND `source_resource`='feather-shops'", orderId)
         local session = not recovery and exports['feather-core']:GetSessionContext(source) or nil
         if not order or (not recovery and (type(session) ~= 'table' or not session.ok or session.value.characterId ~= order.buyer_character_id
             or session.value.accountId ~= order.buyer_account_id)) then
@@ -217,13 +217,13 @@ local function Compensate(orderId, source, checkpoint, recovery)
             return Err('session_expired', 'Buyer session changed.')
         end
         if recovery then
-            if not MySQL.single.await('SELECT `order_id` FROM `shop_order_compensations` WHERE `order_id`=?', { orderId }) then
+            if not DB.one('SELECT `order_id` FROM `shop_order_compensations` WHERE `order_id`=?', orderId) then
                 return Err('recovery_not_allowed', 'Recovery cannot request compensation.')
             end
         else
-            MySQL.insert.await('INSERT IGNORE INTO `shop_order_compensations` (`order_id`) VALUES (?)', { orderId })
+            DB.insert('INSERT IGNORE INTO `shop_order_compensations` (`order_id`) VALUES (?)', orderId)
         end
-        local row = MySQL.single.await('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?', { orderId })
+        local row = DB.one('SELECT * FROM `shop_order_compensations` WHERE `order_id`=?', orderId)
         if row.state == 'refunded' then return Ok({ orderId = orderId, state = row.state,
             transactionId = row.refund_transaction_id, replayed = true }) end
         if row.state == 'delivery_committed' then return Err('grant_already_delivered', 'Committed delivery cannot be refunded.') end
@@ -233,17 +233,17 @@ local function Compensate(orderId, source, checkpoint, recovery)
                 itemName = order.item_name, definitionId = tonumber(order.definition_id), quantity = tonumber(order.quantity) })
             if type(cancelled) ~= 'table' or not cancelled.ok then
                 local code = type(cancelled) == 'table' and cancelled.error and cancelled.error.code or 'dependency_unavailable'
-                MySQL.update.await([[UPDATE `shop_order_compensations` SET `last_error`=?,`state`=?
+                DB.exec([[UPDATE `shop_order_compensations` SET `last_error`=?,`state`=?
                     WHERE `order_id`=? AND `state`='cancellation_pending']],
-                    { code, code == 'grant_already_delivered' and 'delivery_committed' or 'cancellation_pending', orderId })
+                    code, code == 'grant_already_delivered' and 'delivery_committed' or 'cancellation_pending', orderId)
                 return Err(code, 'Cancellation did not complete; no refund attempted.')
             end
             if cancelled.value.cancelled ~= true or cancelled.value.delivered ~= false then
                 return Err('dependency_invalid', 'No durable no-delivery proof; refund blocked.')
             end
-            MySQL.update.await([[UPDATE `shop_order_compensations` SET `state`='refund_pending',
+            DB.exec([[UPDATE `shop_order_compensations` SET `state`='refund_pending',
                 `cancellation_json`=?,`last_error`=NULL WHERE `order_id`=? AND `state`='cancellation_pending']],
-                { json.encode(cancelled.value), orderId })
+                json.encode(cancelled.value), orderId)
         end
         -- Reconfirm the terminal Inventory fence on every pending refund retry.
         -- A local state label or damaged JSON is not sufficient delivery proof.
@@ -253,7 +253,7 @@ local function Compensate(orderId, source, checkpoint, recovery)
         if type(proof) ~= 'table' or not proof.ok or type(proof.value) ~= 'table'
             or proof.value.cancelled ~= true or proof.value.delivered ~= false then
             local code = type(proof) == 'table' and proof.error and proof.error.code or 'dependency_invalid'
-            MySQL.update.await("UPDATE `shop_order_compensations` SET `last_error`=? WHERE `order_id`=? AND `state`='refund_pending'", { code, orderId })
+            DB.exec("UPDATE `shop_order_compensations` SET `last_error`=? WHERE `order_id`=? AND `state`='refund_pending'", code, orderId)
             return Err('refund_pending', 'Durable cancellation proof unavailable; refund blocked.', { cause = code })
         end
         local refund = exports['feather-economy']:ReversePayment({ transactionId = execution.payment_transaction_id },
@@ -261,15 +261,15 @@ local function Compensate(orderId, source, checkpoint, recovery)
                 actorCharacterId = order.buyer_character_id, correlationId = orderId })
         if type(refund) ~= 'table' or not refund.ok then
             local code = type(refund) == 'table' and refund.code or 'dependency_unavailable'
-            MySQL.update.await("UPDATE `shop_order_compensations` SET `last_error`=? WHERE `order_id`=? AND `state`='refund_pending'", { code, orderId })
+            DB.exec("UPDATE `shop_order_compensations` SET `last_error`=? WHERE `order_id`=? AND `state`='refund_pending'", code, orderId)
             return Err('refund_pending', 'Delivery cancelled; retry the same refund.', { cause = code })
         end
         if Config.DevMode and checkpoint == 'after_refund' then
             return Err('test_interrupted', 'Refund committed; acknowledgement deliberately interrupted.')
         end
-        MySQL.update.await([[UPDATE `shop_order_compensations` SET `state`='refunded',
+        DB.exec([[UPDATE `shop_order_compensations` SET `state`='refunded',
             `refund_transaction_id`=?,`last_error`=NULL WHERE `order_id`=? AND `state`='refund_pending']],
-            { refund.value.transactionId, orderId })
+            refund.value.transactionId, orderId)
         return Ok({ orderId = orderId, state = 'refunded', transactionId = refund.value.transactionId, replayed = refund.value.replayed })
     end, debug.traceback)
     active[orderId] = nil
@@ -291,7 +291,7 @@ if Config.DevMode then
             print('[ShopPurchaseInsufficientTest] usage: ShopPurchaseInsufficientTest <source near shop> <fresh requestId>'); return
         end
         if not ShopService.IsReady() then print('[ShopPurchaseInsufficientTest] FAIL service not ready'); return end
-        if MySQL.single.await("SELECT `order_id` FROM `shop_orders` WHERE `source_resource`='feather-shops' AND `request_id`=?", { requestId }) then
+        if DB.one("SELECT `order_id` FROM `shop_orders` WHERE `source_resource`='feather-shops' AND `request_id`=?", requestId) then
             print('[ShopPurchaseInsufficientTest] FAIL fresh request ID required'); return
         end
         local session = exports['feather-core']:GetSessionContext(target)

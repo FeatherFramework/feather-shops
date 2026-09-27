@@ -32,15 +32,15 @@ function ShopOrders.Start()
     local hash = 2166136261
     for index = 1, #schema do hash = ((hash ~ schema:byte(index)) * 16777619) & 0xffffffff end
     local checksum = ('fnv1a32:%08x'):format(hash)
-    local stored = MySQL.scalar.await(
-        'SELECT `checksum` FROM `shop_schema_migrations` WHERE `id`=?', { '002_shop_orders' })
+    local stored = DB.value(
+        'SELECT `checksum` FROM `shop_schema_migrations` WHERE `id`=?', '002_shop_orders')
     if stored and stored ~= checksum then
         return Err('migration_checksum_mismatch', 'Applied shop order migration has changed.')
     end
     if not stored then
-        MySQL.query.await(schema)
-        MySQL.insert.await('INSERT INTO `shop_schema_migrations` (`id`,`checksum`) VALUES (?,?)',
-            { '002_shop_orders', checksum })
+        DB.exec(schema)
+        DB.insert('INSERT INTO `shop_schema_migrations` (`id`,`checksum`) VALUES (?,?)',
+            '002_shop_orders', checksum)
     end
     return Ok({ applied = stored and 0 or 1 })
 end
@@ -65,8 +65,8 @@ local function Replay(row, request, session)
     return Ok(Snapshot(row, true))
 end
 local function Find(resource, requestId)
-    return MySQL.single.await([[SELECT * FROM `shop_orders`
-        WHERE `source_resource`=? AND `request_id`=?]], { resource, requestId })
+    return DB.one([[SELECT * FROM `shop_orders`
+        WHERE `source_resource`=? AND `request_id`=?]], resource, requestId)
 end
 local function Prepare(request, source, resource)
     if Config.Quotes.trustedCallers[resource or ''] ~= true then
@@ -97,25 +97,25 @@ local function Prepare(request, source, resource)
     local validated = ShopQuotes.Validate(request.quoteId, source)
     if not validated.ok then return validated end
     local quote = validated.value
-    local orderId = MySQL.scalar.await('SELECT UUID()')
+    local orderId = DB.value('SELECT UUID()')
     if not ShopService.Uuid(orderId) then return Err('internal_error', 'Could not allocate order identity.') end
     local result
-    local called, committed = pcall(MySQL.startTransaction, function(query)
+    local called, committed = pcall(DB.transaction, function(tx)
         if not Current() or quote.sessionId ~= session.value.sessionId
             or quote.expiresAt <= os.time() then
             result = Err('session_expired', 'Quote or buyer session expired.')
             return false
         end
-        query([[INSERT IGNORE INTO `shop_orders`
+        tx.exec([[INSERT IGNORE INTO `shop_orders`
             (`order_id`,`source_resource`,`request_id`,`quote_id`,`buyer_account_id`,
              `buyer_character_id`,`buyer_session_id`,`shop_id`,`offer_id`,`item_name`,
              `definition_id`,`quantity`,`currency_code`,`unit_price`,`total_amount`,`catalog_revision`)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)]],
-            { orderId, resource, request.requestId, quote.id, quote.accountId, quote.characterId,
+            orderId, resource, request.requestId, quote.id, quote.accountId, quote.characterId,
                 quote.sessionId, quote.shopId, quote.offerId, quote.itemName, quote.definitionId,
-                quote.quantity, quote.currency, quote.unitPrice, quote.total, quote.catalogRevision })
-        local rows = query([[SELECT * FROM `shop_orders` WHERE `source_resource`=?
-            AND `request_id`=? FOR UPDATE]], { resource, request.requestId }) or {}
+                quote.quantity, quote.currency, quote.unitPrice, quote.total, quote.catalogRevision)
+        local rows = tx.query([[SELECT * FROM `shop_orders` WHERE `source_resource`=?
+            AND `request_id`=? FOR UPDATE]], resource, request.requestId) or {}
         local row = rows[1]
         if not row then result = Err('internal_error', 'Order could not be reserved.'); return false end
         if not Current() then result = Err('session_expired', 'Buyer session changed.'); return false end
@@ -127,7 +127,8 @@ local function Prepare(request, source, resource)
         return result.ok
     end)
     if not called or committed ~= true then
-        return result or Err('internal_error', 'Order transaction failed.')
+        if type(result) == 'table' and result.ok == false then return result end
+        return Err('internal_error', 'Order transaction did not confirm commit.')
     end
     return result
 end
@@ -141,9 +142,9 @@ ShopService.RegisterDevCommand('ShopOrderContractSmokeTest', function(source)
     if not ShopService.IsReady() then print('[ShopOrderContractSmokeTest] FAIL service not ready'); return end
     local unauthorized = Prepare({}, 1, 'untrusted-test-resource')
     local invalid = Prepare({}, 1, 'feather-shops')
-    local invalidStates = tonumber(MySQL.scalar.await(
+    local invalidStates = tonumber(DB.value(
         "SELECT COUNT(*) FROM `shop_orders` WHERE `status` <> 'prepared'"))
-    local invalidTotals = tonumber(MySQL.scalar.await(
+    local invalidTotals = tonumber(DB.value(
         'SELECT COUNT(*) FROM `shop_orders` WHERE `total_amount` <> `unit_price` * `quantity`'))
     local tests = {
         { 'untrusted caller rejected', not unauthorized.ok and unauthorized.code == 'authorization_denied' },
@@ -190,8 +191,8 @@ ShopService.RegisterDevCommand('ShopOrderPersistenceTest', function(source, args
     local replayed = first.ok and Prepare(request, target, 'feather-shops') or first
     local mismatch = Prepare({ requestId = requestId,
         quoteId = 'ffffffff-ffff-4fff-8fff-ffffffffffff' }, target, 'feather-shops')
-    local count = tonumber(MySQL.scalar.await([[SELECT COUNT(*) FROM `shop_orders`
-        WHERE `source_resource`='feather-shops' AND `request_id`=?]], { requestId }))
+    local count = tonumber(DB.value([[SELECT COUNT(*) FROM `shop_orders`
+        WHERE `source_resource`='feather-shops' AND `request_id`=?]], requestId))
     local passed = first.ok and replayed.ok and replayed.value.replayed
         and replayed.value.id == first.value.id and first.value.status == 'prepared'
         and not mismatch.ok and mismatch.code == 'idempotency_conflict' and count == 1

@@ -24,6 +24,9 @@ for root in roots:
         for path in (root / folder).rglob('*.lua'):
             lua.execute('assert(load(...))', path.read_text(encoding='utf-8-sig'), '@' + str(path))
 lua.globals().arg = lua.table_from({i + 1: root.as_posix() for i, root in enumerate(roots)})
+catalog_lua = LuaRuntime(unpack_returned_tuples=True)
+catalog_lua.globals().arg = catalog_lua.table_from({i + 1: root.as_posix() for i, root in enumerate(roots)})
+catalog_lua.execute((roots[1] / 'tests/catalog_packages_spec.lua').read_text(encoding='utf-8'))
 fixture = roots[0] / 'tests/lua/slot_updates_spec.lua'
 lua.execute(fixture.read_text(encoding='utf-8'))
 print(f'PASS {lua.globals().ShopCheckoutCompositionCases} four-resource checkout scenarios (modeled SQL/CFX; live database acceptance pending)')

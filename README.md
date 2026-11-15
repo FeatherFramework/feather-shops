@@ -1,6 +1,6 @@
 # Feather Shops
 
-Current version: **0.4.0**.
+Current version: **0.4.1**. Adds melee and throwable category presentation for the Weapons-owned gun-store catalog.
 
 ## Weapons-owned gun stores and ammunition boxes
 
